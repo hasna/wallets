@@ -516,4 +516,45 @@ agentCmd
     console.log(chalk.green(`Agent registered: ${agent.id} ${agent.name}`));
   });
 
+// Top-level remove/uninstall — delegates to provider/card remove
+program
+  .command("remove <type> <name>")
+  .alias("rm")
+  .alias("uninstall")
+  .description("Remove a record. Type: provider | card")
+  .action((type: string, name: string) => {
+    try {
+      switch (type.toLowerCase()) {
+        case "provider": {
+          const provider = getProviderByName(name);
+          if (!provider) {
+            console.error(chalk.red(`Provider not found: ${name}`));
+            process.exit(1);
+          }
+          deleteProvider(provider.id);
+          removeProviderConfig(name);
+          const config = loadConfig();
+          if (config.default_provider === name) { delete config.default_provider; saveConfig(config); }
+          console.log(chalk.green(`✓ Provider removed: ${name}`));
+          break;
+        }
+        case "card": {
+          const db = getDatabase();
+          const cardId = resolvePartialId(db, "cards", name) ?? name;
+          const card = getCard(cardId);
+          if (!card) { console.error(chalk.red(`Card not found: ${name}`)); process.exit(1); }
+          updateCard(cardId, { status: "closed" });
+          console.log(chalk.green(`✓ Card ${cardId.slice(0, 8)} closed`));
+          break;
+        }
+        default:
+          console.error(chalk.red(`Unknown type: ${type}. Use: provider | card`));
+          process.exit(1);
+      }
+    } catch (e) {
+      console.error(chalk.red(`Failed: ${e instanceof Error ? e.message : String(e)}`));
+      process.exit(1);
+    }
+  });
+
 program.parse();
