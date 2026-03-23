@@ -380,6 +380,31 @@ server.resource("wallets://agents", "wallets://agents", async () => {
   return { contents: [{ uri: "wallets://agents", text: JSON.stringify(agents, null, 2), mimeType: "application/json" }] };
 });
 
+// ── Feedback ──────────────────────────────────────────────────────────────
+
+server.tool(
+  "send_feedback",
+  "Send feedback about this service",
+  {
+    message: z.string().describe("Feedback message"),
+    email: z.string().optional().describe("Contact email (optional)"),
+    category: z.enum(["bug", "feature", "general"]).optional().describe("Feedback category"),
+  },
+  async (params) => {
+    try {
+      const db = getDatabase();
+      const pkg = require("../../package.json");
+      db.run(
+        "INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)",
+        [params.message, params.email || null, params.category || "general", pkg.version]
+      );
+      return { content: [{ type: "text" as const, text: "Feedback saved. Thank you!" }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true as const };
+    }
+  }
+);
+
 // ── Start ──────────────────────────────────────────────────────────────────
 
 async function main() {

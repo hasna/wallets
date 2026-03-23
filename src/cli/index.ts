@@ -557,4 +557,26 @@ program
     }
   });
 
+// ── feedback ──────────────────────────────────────────────────────────────────
+
+program
+  .command("feedback <message>")
+  .description("Send feedback about this service")
+  .option("-e, --email <email>", "Contact email")
+  .option("-c, --category <cat>", "Category: bug, feature, general", "general")
+  .action(async (message: string, opts: { email?: string; category?: string }) => {
+    try {
+      const db = getDatabase();
+      const version = getVersion();
+      db.run(
+        "INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)",
+        [message, opts.email || null, opts.category || "general", version]
+      );
+      console.log(chalk.green("✓") + " Feedback saved. Thank you!");
+    } catch (e) {
+      console.error(chalk.red(`Failed: ${e instanceof Error ? e.message : String(e)}`));
+      process.exit(1);
+    }
+  });
+
 program.parse();

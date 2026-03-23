@@ -1,9 +1,11 @@
 import { Database } from "bun:sqlite";
+import { SqliteAdapter, ensureFeedbackTable, migrateDotfile } from "@hasna/cloud";
 import { homedir } from "os";
 import { join } from "path";
 import { existsSync, mkdirSync } from "fs";
 
 let _db: Database | null = null;
+let _adapter: SqliteAdapter | null = null;
 
 const MIGRATIONS: { id: number; sql: string }[] = [
   {
@@ -104,15 +106,9 @@ function resolveDbPath(): string {
   if (process.env["WALLETS_DB_PATH"]) return process.env["WALLETS_DB_PATH"];
 
   const home = homedir();
+  migrateDotfile("wallets");
   const newDir = join(home, ".hasna", "wallets");
-  const legacyDir = join(home, ".wallets");
   const newPath = join(newDir, "wallets.db");
-  const legacyPath = join(legacyDir, "wallets.db");
-
-  // Use legacy DB if it exists and new one doesn't yet (backward compat)
-  if (!existsSync(newPath) && existsSync(legacyPath)) {
-    return legacyPath;
-  }
 
   if (!existsSync(newDir)) {
     mkdirSync(newDir, { recursive: true });
@@ -124,13 +120,13 @@ export function getDatabase(dbPath?: string): Database {
   if (_db) return _db;
 
   const path = dbPath || resolveDbPath();
-  _db = new Database(path);
+  _adapter = new SqliteAdapter(path);
+  _db = _adapter.raw;
 
-  _db.run("PRAGMA journal_mode = WAL");
-  _db.run("PRAGMA foreign_keys = ON");
   _db.run("PRAGMA busy_timeout = 5000");
 
   runMigrations(_db);
+  ensureFeedbackTable(_adapter);
 
   return _db;
 }
@@ -139,12 +135,14 @@ export function closeDatabase(): void {
   if (_db) {
     _db.close();
     _db = null;
+    _adapter = null;
   }
 }
 
 export function resetDatabase(): void {
   closeDatabase();
   _db = null;
+  _adapter = null;
 }
 
 export function now(): string {
