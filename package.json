@@ -25,7 +25,8 @@
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "dev:cli": "bun run src/cli/index.ts",
-    "dev:mcp": "bun run src/mcp/index.ts"
+    "dev:mcp": "bun run src/mcp/index.ts",
+    "postinstall": "mkdir -p $HOME/.hasna/wallets 2>/dev/null || true"
   },
   "keywords": [
     "wallets",
