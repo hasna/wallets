@@ -9,7 +9,18 @@ export interface WalletsConfig {
 }
 
 export function getConfigDir(): string {
-  return process.env["WALLETS_CONFIG_DIR"] || join(homedir(), ".wallets");
+  if (process.env["WALLETS_CONFIG_DIR"]) return process.env["WALLETS_CONFIG_DIR"];
+
+  const home = homedir();
+  const newDir = join(home, ".hasna", "wallets");
+  const legacyDir = join(home, ".wallets");
+
+  // Use legacy dir if it exists and new one doesn't yet (backward compat)
+  if (!existsSync(newDir) && existsSync(legacyDir)) {
+    return legacyDir;
+  }
+
+  return newDir;
 }
 
 export function getConfigPath(): string {

@@ -100,14 +100,24 @@ function runMigrations(db: Database): void {
 }
 
 function resolveDbPath(): string {
-  const envPath = process.env["WALLETS_DB_PATH"];
-  if (envPath) return envPath;
+  if (process.env["HASNA_WALLETS_DB_PATH"]) return process.env["HASNA_WALLETS_DB_PATH"];
+  if (process.env["WALLETS_DB_PATH"]) return process.env["WALLETS_DB_PATH"];
 
-  const dir = join(homedir(), ".wallets");
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
+  const home = homedir();
+  const newDir = join(home, ".hasna", "wallets");
+  const legacyDir = join(home, ".wallets");
+  const newPath = join(newDir, "wallets.db");
+  const legacyPath = join(legacyDir, "wallets.db");
+
+  // Use legacy DB if it exists and new one doesn't yet (backward compat)
+  if (!existsSync(newPath) && existsSync(legacyPath)) {
+    return legacyPath;
   }
-  return join(dir, "wallets.db");
+
+  if (!existsSync(newDir)) {
+    mkdirSync(newDir, { recursive: true });
+  }
+  return newPath;
 }
 
 export function getDatabase(dbPath?: string): Database {

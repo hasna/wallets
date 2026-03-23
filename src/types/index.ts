@@ -262,7 +262,7 @@ export class InsufficientFundsError extends Error {
 
 export class ConfigError extends Error {
   static code = "CONFIG_ERROR";
-  static suggestion = "Check ~/.wallets/config.json and ensure all required fields are set.";
+  static suggestion = "Check ~/.hasna/wallets/config.json and ensure all required fields are set.";
 
   constructor(message: string) {
     super(message);
