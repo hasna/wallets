@@ -44,6 +44,22 @@ export function listAgents(db?: Database): Agent[] {
   return rows.map(rowToAgent);
 }
 
+export function heartbeatAgent(idOrName: string, db?: Database): Agent | null {
+  const d = db || getDatabase();
+  const agent = getAgent(idOrName, d) ?? getAgentByName(idOrName, d);
+  if (!agent) return null;
+  d.run("UPDATE agents SET last_seen_at = ? WHERE id = ?", [now(), agent.id]);
+  return getAgent(agent.id, d);
+}
+
+export function setAgentFocus(idOrName: string, projectId: string | null, db?: Database): Agent | null {
+  const d = db || getDatabase();
+  const agent = getAgent(idOrName, d) ?? getAgentByName(idOrName, d);
+  if (!agent) return null;
+  d.run("UPDATE agents SET active_project_id = ?, last_seen_at = ? WHERE id = ?", [projectId, now(), agent.id]);
+  return getAgent(agent.id, d);
+}
+
 export function deleteAgent(id: string, db?: Database): boolean {
   const d = db || getDatabase();
   return d.run("DELETE FROM agents WHERE id = ?", [id]).changes > 0;

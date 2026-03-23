@@ -77,6 +77,10 @@ const MIGRATIONS: { id: number; sql: string }[] = [
       );
     `,
   },
+  {
+    id: 2,
+    sql: `ALTER TABLE agents ADD COLUMN active_project_id TEXT;`,
+  },
 ];
 
 function runMigrations(db: Database): void {

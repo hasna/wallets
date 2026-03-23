@@ -6,7 +6,7 @@ import { getDatabase, resolvePartialId } from "../db/database.js";
 import { listProviders, getProvider, getProviderByName, ensureProvider } from "../db/providers.js";
 import { createCardRecord, listCards, getCard, updateCard, updateCardBalance } from "../db/cards.js";
 import { listTransactions } from "../db/transactions.js";
-import { registerAgent, listAgents } from "../db/agents.js";
+import { registerAgent, listAgents, heartbeatAgent, setAgentFocus } from "../db/agents.js";
 import { getProviderInstance } from "../providers/index.js";
 import { loadConfig, saveConfig, getProviderConfig, setProviderConfig } from "../lib/config.js";
 import { runDoctor } from "../lib/doctor.js";
@@ -350,6 +350,10 @@ server.tool(
       register_provider: "Register provider. Params: type (required), name, jwt, api_key, base_url, set_default.",
       list_transactions: "List transactions. Params: card_id, limit.",
       doctor: "Run diagnostics. No params.",
+      register_agent: "Register agent session (idempotent). Params: name, description?",
+      list_agents: "List all registered agents.",
+      heartbeat: "Update last_seen_at to signal agent is active. Params: agent_id",
+      set_focus: "Set active project context. Params: agent_id, project_id?",
     };
 
     if (params.name) {
@@ -379,6 +383,72 @@ server.resource("wallets://agents", "wallets://agents", async () => {
   const agents = listAgents();
   return { contents: [{ uri: "wallets://agents", text: JSON.stringify(agents, null, 2), mimeType: "application/json" }] };
 });
+
+// ── Agent Tools ──────────────────────────────────────────────────────────
+
+server.tool(
+  "register_agent",
+  "Register an agent session (idempotent). Auto-updates last_seen_at on re-register.",
+  {
+    name: z.string().describe("Agent name"),
+    description: z.string().optional().describe("Agent description"),
+  },
+  async (params) => {
+    try {
+      const agent = registerAgent({ name: params.name, description: params.description });
+      return { content: [{ type: "text" as const, text: JSON.stringify(agent, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  "list_agents",
+  "List all registered agents.",
+  {},
+  async () => {
+    try {
+      const agents = listAgents();
+      return { content: [{ type: "text" as const, text: JSON.stringify(agents, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  "heartbeat",
+  "Update last_seen_at to signal agent is active. Call periodically during long tasks.",
+  { agent_id: z.string().describe("Agent ID or name") },
+  async (params) => {
+    try {
+      const agent = heartbeatAgent(params.agent_id);
+      if (!agent) return { content: [{ type: "text" as const, text: `Agent not found: ${params.agent_id}` }], isError: true };
+      return { content: [{ type: "text" as const, text: JSON.stringify(agent, null, 2) }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  "set_focus",
+  "Set active project context for this agent session.",
+  {
+    agent_id: z.string().describe("Agent ID or name"),
+    project_id: z.string().nullable().optional().describe("Project ID to focus on, or null to clear"),
+  },
+  async (params) => {
+    try {
+      const agent = setAgentFocus(params.agent_id, params.project_id ?? null);
+      if (!agent) return { content: [{ type: "text" as const, text: `Agent not found: ${params.agent_id}` }], isError: true };
+      return { content: [{ type: "text" as const, text: params.project_id ? `Focus: ${params.project_id}` : "Focus cleared" }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  }
+);
 
 // ── Feedback ──────────────────────────────────────────────────────────────
 
