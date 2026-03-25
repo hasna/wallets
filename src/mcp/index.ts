@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { registerCloudTools } from "@hasna/cloud";
 import { z } from "zod";
 import { getDatabase, resolvePartialId } from "../db/database.js";
 import { listProviders, getProvider, getProviderByName, ensureProvider } from "../db/providers.js";
@@ -479,6 +480,7 @@ server.tool(
 
 async function main() {
   const transport = new StdioServerTransport();
+  registerCloudTools(server, "wallets");
   await server.connect(transport);
 }
 
