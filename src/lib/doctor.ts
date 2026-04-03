@@ -1,25 +1,42 @@
-import { existsSync } from "fs";
+import { existsSync, mkdirSync } from "fs";
 import { join } from "path";
 import type { DoctorCheck, DoctorResult } from "../types/index.js";
-import { getConfigDir, getConfigPath, loadConfig } from "./config.js";
+import { getConfigDir, getConfigPath, loadConfig, saveConfig } from "./config.js";
 import { getDatabase } from "../db/database.js";
 import { listProviders } from "../db/providers.js";
 
-export function runDoctor(): DoctorResult {
+export function runDoctor(fix = false): DoctorResult {
   const checks: DoctorCheck[] = [];
+  const fixed: string[] = [];
+
+  // Auto-fix: config directory
+  const configDir = getConfigDir();
+  if (!existsSync(configDir)) {
+    if (fix) {
+      mkdirSync(configDir, { recursive: true });
+      fixed.push(`Created config directory at ${configDir}`);
+    }
+  }
 
   // Check 1: Config directory exists
-  const configDir = getConfigDir();
   checks.push({
     name: "Config directory",
-    status: existsSync(configDir) ? "ok" : "warn",
+    status: existsSync(configDir) ? "ok" : fix ? "ok" : "warn",
     message: existsSync(configDir)
       ? `Found at ${configDir}`
-      : `Not found at ${configDir}. Run 'wallets provider add' to create it.`,
+      : fix ? `Created at ${configDir}` : `Not found at ${configDir}. Run 'wallets provider add' to create it.`,
   });
 
-  // Check 2: Config file exists and is valid
+  // Auto-fix: config file
   const configPath = getConfigPath();
+  if (!existsSync(configPath)) {
+    if (fix) {
+      saveConfig({});
+      fixed.push(`Created empty config at ${configPath}`);
+    }
+  }
+
+  // Check 2: Config file exists and is valid
   if (existsSync(configPath)) {
     try {
       const config = loadConfig();

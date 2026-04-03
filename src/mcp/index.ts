@@ -361,6 +361,7 @@ server.tool(
   {
     card_id: z.string().optional().describe("Card ID to filter"),
     limit: z.number().optional().describe("Max results (default: 20)"),
+    offset: z.number().optional().describe("Offset for pagination (default: 0)"),
   },
   async (params) => {
     try {
@@ -372,6 +373,7 @@ server.tool(
       const txns = listTransactions({
         card_id: cardId,
         limit: params.limit || 20,
+        offset: params.offset || 0,
       });
 
       if (txns.length === 0) {

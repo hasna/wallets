@@ -152,4 +152,12 @@ export class AgentCardProvider implements WalletProvider {
   async closeCard(externalId: string): Promise<void> {
     await this.request(`/cards/${externalId}/close`, { method: "POST" });
   }
+
+  async freezeCard(externalId: string): Promise<void> {
+    await this.request(`/cards/${externalId}/freeze`, { method: "POST" });
+  }
+
+  async unfreezeCard(externalId: string): Promise<void> {
+    await this.request(`/cards/${externalId}/unfreeze`, { method: "POST" });
+  }
 }
