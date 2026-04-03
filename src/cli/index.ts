@@ -2,9 +2,7 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import jmespath from "jmespath";
-import { existsSync, mkdirSync, readFileSync } from "fs";
-import { homedir } from "os";
-import { join } from "path";
+import { existsSync, mkdirSync } from "fs";
 import { getDatabase, resolvePartialId, resolveCardId } from "../db/database.js";
 import { listProviders, getProvider, getProviderByName, deleteProvider, ensureProvider } from "../db/providers.js";
 import { createCardRecord, listCards, getCard, updateCard, getCardByIdempotencyKey } from "../db/cards.js";
@@ -17,6 +15,7 @@ import { runDoctor } from "../lib/doctor.js";
 import { formatCard, formatProvider, formatTransaction } from "../lib/format.js";
 import type { Card } from "../types/index.js";
 import { EXIT_CODES } from "../types/index.js";
+import { homedir } from "os";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { execSync } from "child_process";
