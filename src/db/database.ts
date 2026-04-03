@@ -85,6 +85,25 @@ const MIGRATIONS: { id: number; sql: string }[] = [
     id: 3,
     sql: `ALTER TABLE cards ADD COLUMN idempotency_key TEXT; CREATE UNIQUE INDEX IF NOT EXISTS idx_cards_idempotency ON cards(idempotency_key) WHERE idempotency_key IS NOT NULL;`,
   },
+  {
+    id: 4,
+    sql: `
+      CREATE TABLE IF NOT EXISTS audit_log (
+        id TEXT PRIMARY KEY,
+        action TEXT NOT NULL CHECK(action IN ('create', 'update', 'delete')),
+        entity_type TEXT NOT NULL CHECK(entity_type IN ('card', 'provider', 'transaction', 'agent')),
+        entity_id TEXT NOT NULL,
+        actor_id TEXT,
+        actor_name TEXT,
+        changes TEXT DEFAULT '{}',
+        metadata TEXT DEFAULT '{}',
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity_type, entity_id);
+      CREATE INDEX IF NOT EXISTS idx_audit_actor ON audit_log(actor_id);
+      CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log(action);
+    `,
+  },
 ];
 
 function runMigrations(db: Database): void {
@@ -170,5 +189,23 @@ export function resolvePartialId(db: Database, table: string, partialId: string)
     .query(`SELECT id FROM ${table} WHERE id LIKE ?`)
     .all(`${partialId}%`) as { id: string }[];
   if (rows.length === 1 && rows[0]) return rows[0].id;
+  return null;
+}
+
+export function resolveCardId(db: Database, partialId: string): string | null {
+  // 1. Try UUID prefix match
+  const byId = db.query("SELECT id FROM cards WHERE id LIKE ?").all(`${partialId}%`) as { id: string }[];
+  if (byId.length === 1 && byId[0]) return byId[0].id;
+  if (byId.length > 1) return null; // ambiguous
+
+  // 2. Try name match (case-insensitive, partial)
+  const byName = db.query("SELECT id, name FROM cards WHERE LOWER(name) LIKE LOWER(?)").all(`%${partialId}%`) as { id: string; name: string }[];
+  if (byName.length === 1 && byName[0]) return byName[0].id;
+  if (byName.length > 1) return null; // ambiguous
+
+  // 3. Try last_four match (exact)
+  const byLast4 = db.query("SELECT id FROM cards WHERE last_four = ?").all(partialId) as { id: string }[];
+  if (byLast4.length === 1 && byLast4[0]) return byLast4[0].id;
+
   return null;
 }
