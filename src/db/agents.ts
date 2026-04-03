@@ -1,6 +1,9 @@
 import { Database } from "bun:sqlite";
 import { getDatabase, now, shortId } from "./database.js";
 import type { Agent, AgentRow, RegisterAgentInput } from "../types/index.js";
+import { cached, cacheClear } from "../lib/cache.js";
+
+const AGENT_LIST_TTL = 30_000; // 30 seconds
 
 function rowToAgent(row: AgentRow): Agent {
   return { ...row };
@@ -13,6 +16,7 @@ export function registerAgent(input: RegisterAgentInput, db?: Database): Agent {
   const existing = getAgentByName(normalizedName, d);
   if (existing) {
     d.run("UPDATE agents SET last_seen_at = ? WHERE id = ?", [now(), existing.id]);
+    cacheClear("agents:");
     return getAgent(existing.id, d)!;
   }
 
@@ -21,6 +25,7 @@ export function registerAgent(input: RegisterAgentInput, db?: Database): Agent {
     "INSERT INTO agents (id, name, description) VALUES (?, ?, ?)",
     [id, normalizedName, input.description ?? null]
   );
+  cacheClear("agents:");
 
   return getAgent(id, d)!;
 }
@@ -39,9 +44,11 @@ export function getAgentByName(name: string, db?: Database): Agent | null {
 }
 
 export function listAgents(db?: Database): Agent[] {
-  const d = db || getDatabase();
-  const rows = d.query("SELECT * FROM agents ORDER BY last_seen_at DESC").all() as AgentRow[];
-  return rows.map(rowToAgent);
+  return cached("agents:list", AGENT_LIST_TTL, () => {
+    const d = db || getDatabase();
+    const rows = d.query("SELECT * FROM agents ORDER BY last_seen_at DESC").all() as AgentRow[];
+    return rows.map(rowToAgent);
+  });
 }
 
 export function heartbeatAgent(idOrName: string, db?: Database): Agent | null {
@@ -57,10 +64,13 @@ export function setAgentFocus(idOrName: string, projectId: string | null, db?: D
   const agent = getAgent(idOrName, d) ?? getAgentByName(idOrName, d);
   if (!agent) return null;
   d.run("UPDATE agents SET active_project_id = ?, last_seen_at = ? WHERE id = ?", [projectId, now(), agent.id]);
+  cacheClear("agents:");
   return getAgent(agent.id, d);
 }
 
 export function deleteAgent(id: string, db?: Database): boolean {
   const d = db || getDatabase();
-  return d.run("DELETE FROM agents WHERE id = ?", [id]).changes > 0;
+  const result = d.run("DELETE FROM agents WHERE id = ?", [id]);
+  if (result.changes > 0) cacheClear("agents:");
+  return result.changes > 0;
 }

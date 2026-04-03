@@ -1,6 +1,9 @@
 import { Database } from "bun:sqlite";
 import { getDatabase, now, shortId } from "./database.js";
 import type { Provider, ProviderRow, CreateProviderInput } from "../types/index.js";
+import { cached, cacheClear } from "../lib/cache.js";
+
+const PROVIDER_LIST_TTL = 30_000; // 30 seconds
 
 function rowToProvider(row: ProviderRow): Provider {
   return {
@@ -25,6 +28,7 @@ export function createProvider(input: CreateProviderInput, db?: Database): Provi
       JSON.stringify(input.metadata || {}),
     ]
   );
+  cacheClear("providers:");
 
   return getProvider(id, d)!;
 }
@@ -48,9 +52,11 @@ export function getProviderByType(type: string, db?: Database): Provider | null 
 }
 
 export function listProviders(db?: Database): Provider[] {
-  const d = db || getDatabase();
-  const rows = d.query("SELECT * FROM providers ORDER BY created_at DESC").all() as ProviderRow[];
-  return rows.map(rowToProvider);
+  return cached("providers:list", PROVIDER_LIST_TTL, () => {
+    const d = db || getDatabase();
+    const rows = d.query("SELECT * FROM providers ORDER BY created_at DESC").all() as ProviderRow[];
+    return rows.map(rowToProvider);
+  });
 }
 
 export function updateProvider(id: string, input: Partial<CreateProviderInput> & { status?: Provider["status"] }, db?: Database): Provider {
@@ -83,6 +89,7 @@ export function updateProvider(id: string, input: Partial<CreateProviderInput> &
     params.push(now());
     params.push(id);
     d.run(`UPDATE providers SET ${sets.join(", ")} WHERE id = ?`, params);
+    cacheClear("providers:");
   }
 
   return getProvider(id, d)!;
@@ -90,7 +97,9 @@ export function updateProvider(id: string, input: Partial<CreateProviderInput> &
 
 export function deleteProvider(id: string, db?: Database): boolean {
   const d = db || getDatabase();
-  return d.run("DELETE FROM providers WHERE id = ?", [id]).changes > 0;
+  const result = d.run("DELETE FROM providers WHERE id = ?", [id]);
+  if (result.changes > 0) cacheClear("providers:");
+  return result.changes > 0;
 }
 
 export function ensureProvider(name: string, type: string, config?: Record<string, unknown>, db?: Database): Provider {

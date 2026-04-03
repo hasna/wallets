@@ -1,12 +1,16 @@
 import { homedir } from "os";
 import { join } from "path";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { z } from "zod";
+import chalk from "chalk";
 
-export interface WalletsConfig {
-  default_provider?: string;
-  default_currency?: string;
-  providers?: Record<string, Record<string, unknown>>;
-}
+export const WalletsConfigSchema = z.object({
+  default_provider: z.string().optional(),
+  default_currency: z.string().optional(),
+  providers: z.record(z.string(), z.record(z.unknown())).optional(),
+});
+
+export type WalletsConfig = z.infer<typeof WalletsConfigSchema>;
 
 export function getConfigDir(): string {
   if (process.env["WALLETS_CONFIG_DIR"]) return process.env["WALLETS_CONFIG_DIR"];
@@ -33,8 +37,12 @@ export function loadConfig(): WalletsConfig {
     return {};
   }
   try {
-    return JSON.parse(readFileSync(configPath, "utf-8"));
-  } catch {
+    const raw = JSON.parse(readFileSync(configPath, "utf-8"));
+    return WalletsConfigSchema.parse(raw);
+  } catch (e) {
+    if (e instanceof z.ZodError) {
+      console.error(chalk.yellow(`Config validation errors: ${e.errors.map((err) => `${err.path.join(".")}: ${err.message}`).join(", ")}`));
+    }
     return {};
   }
 }

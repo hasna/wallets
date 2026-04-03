@@ -15,6 +15,16 @@ export type ProviderStatus = (typeof PROVIDER_STATUSES)[number];
 export const CURRENCIES = ["USD", "EUR", "GBP", "CAD", "AUD"] as const;
 export type Currency = (typeof CURRENCIES)[number];
 
+// ── Exit Codes (for AI agent compatibility) ─────────────────────────────────
+
+export const EXIT_CODES = {
+  SUCCESS: 0,
+  ERROR: 1,
+  NOT_FOUND: 2,
+  VALIDATION: 3,
+} as const;
+export type ExitCode = (typeof EXIT_CODES)[keyof typeof EXIT_CODES];
+
 // ── Domain Types ───────────────────────────────────────────────────────────
 
 export interface Provider {
