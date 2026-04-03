@@ -12,7 +12,8 @@ import {
 export function formatCard(card: Card): string {
   const id = card.id.slice(0, 8);
   const last4 = card.last_four ? `*${card.last_four}` : "----";
-  return `${id} ${card.status.padEnd(8)} ${last4.padEnd(6)} $${card.balance.toFixed(2).padStart(10)} ${card.name}`;
+  const category = card.metadata?.category ? `[${card.metadata.category}] ` : "";
+  return `${id} ${card.status.padEnd(8)} ${last4.padEnd(6)} $${card.balance.toFixed(2).padStart(10)} ${category}${card.name}`;
 }
 
 export function formatProvider(provider: Provider): string {
