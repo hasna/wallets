@@ -2,6 +2,9 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import jmespath from "jmespath";
+import { existsSync, mkdirSync, readFileSync } from "fs";
+import { homedir } from "os";
+import { join } from "path";
 import { getDatabase, resolvePartialId, resolveCardId } from "../db/database.js";
 import { listProviders, getProvider, getProviderByName, deleteProvider, ensureProvider } from "../db/providers.js";
 import { createCardRecord, listCards, getCard, updateCard, getCardByIdempotencyKey } from "../db/cards.js";
@@ -9,7 +12,7 @@ import { listTransactions } from "../db/transactions.js";
 import { registerAgent, listAgents, getAgent } from "../db/agents.js";
 import { listAuditLog, type AuditEntry } from "../db/audit.js";
 import { getProviderInstance } from "../providers/index.js";
-import { loadConfig, saveConfig, setProviderConfig, removeProviderConfig, getProviderConfig } from "../lib/config.js";
+import { loadConfig, saveConfig, setProviderConfig, removeProviderConfig, getProviderConfig, getConfigDir, getConfigPath, type WalletsConfig } from "../lib/config.js";
 import { runDoctor } from "../lib/doctor.js";
 import { formatCard, formatProvider, formatTransaction } from "../lib/format.js";
 import type { Card } from "../types/index.js";
@@ -1182,5 +1185,23 @@ program
       console.log(`  ${chalk.dim(entry.created_at)} ${entry.action.padEnd(8)} ${entry.entity_type.padEnd(12)} ${entry.entity_id.slice(0, 8)} by ${actor}`);
     }
   });
+
+// ── RC file support (~/.walletsrc) ─────────────────────────────────────────
+
+function loadRcFile(): string[] {
+  const rcPath = join(homedir(), ".walletsrc");
+  if (!existsSync(rcPath)) return [];
+  try {
+    const content = readFileSync(rcPath, "utf-8");
+    return content.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+  } catch {
+    return [];
+  }
+}
+
+const rcArgs = loadRcFile();
+if (rcArgs.length > 0) {
+  process.argv = [...process.argv.slice(0, 2), ...rcArgs, ...process.argv.slice(2)];
+}
 
 program.parse();
