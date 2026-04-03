@@ -1,4 +1,4 @@
-import type { Card, CardDetails, CreateCardInput, Currency, WalletProvider } from "../types/index.js";
+import type { Card, CardDetails, CreateCardInput, Currency, WalletProvider, Transaction, TransactionType } from "../types/index.js";
 import { ProviderError } from "../types/index.js";
 
 interface AgentCardConfig {
@@ -159,5 +159,33 @@ export class AgentCardProvider implements WalletProvider {
 
   async unfreezeCard(externalId: string): Promise<void> {
     await this.request(`/cards/${externalId}/unfreeze`, { method: "POST" });
+  }
+
+  async getTransactions(externalId: string): Promise<Transaction[]> {
+    const data = (await this.request(`/cards/${externalId}/transactions`)) as Array<{
+      id: string;
+      type: string;
+      status: string;
+      amount: number;
+      currency?: string;
+      merchant?: string;
+      description?: string;
+      created_at?: string;
+    }>;
+
+    return data.map((tx) => ({
+      id: tx.id,
+      card_id: "",
+      provider_id: "",
+      external_id: tx.id,
+      type: (tx.type as TransactionType) || "purchase",
+      status: (tx.status as Transaction["status"]) || "completed",
+      amount: tx.amount,
+      currency: (tx.currency as Currency) || "USD",
+      merchant: tx.merchant || null,
+      description: tx.description || null,
+      metadata: {},
+      created_at: tx.created_at || new Date().toISOString(),
+    }));
   }
 }

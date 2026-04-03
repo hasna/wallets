@@ -17,6 +17,21 @@ Universal wallet management for AI agents. Create and manage virtual cards acros
 bun install -g @hasna/wallets
 ```
 
+## Shell Completions
+
+Add tab completion for `wallets` CLI:
+
+**Bash** — add to `~/.bashrc`:
+```bash
+source /path/to/open-wallets/completions/wallets.bash
+```
+
+**Zsh** — add to `~/.zshrc`:
+```bash
+fpath=(/path/to/open-wallets/completions $fpath)
+autoload -U compinit && compinit
+```
+
 ## Quick Start
 
 ```bash

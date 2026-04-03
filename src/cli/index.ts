@@ -6,7 +6,7 @@ import { existsSync, mkdirSync } from "fs";
 import { getDatabase, resolvePartialId, resolveCardId } from "../db/database.js";
 import { listProviders, getProvider, getProviderByName, deleteProvider, ensureProvider } from "../db/providers.js";
 import { createCardRecord, listCards, getCard, updateCard, getCardByIdempotencyKey } from "../db/cards.js";
-import { listTransactions } from "../db/transactions.js";
+import { listTransactions, createTransaction } from "../db/transactions.js";
 import { registerAgent, listAgents, getAgent } from "../db/agents.js";
 import { listAuditLog, type AuditEntry } from "../db/audit.js";
 import { getProviderInstance } from "../providers/index.js";
@@ -43,7 +43,19 @@ function resolveId(partialId: string, table = "cards"): string {
     id = resolvePartialId(db, table, partialId);
   }
   if (!id) {
-    console.error(chalk.red(`Could not resolve ID: ${partialId}`));
+    // Check if ambiguous (multiple matches)
+    if (table === "cards") {
+      const byId = db.query("SELECT id FROM cards WHERE id LIKE ?").all(`${partialId}%`) as { id: string }[];
+      const byName = db.query("SELECT id, name FROM cards WHERE LOWER(name) LIKE LOWER(?)").all(`%${partialId}%`) as { id: string; name: string }[];
+      const byLast4 = partialId.length === 4 ? db.query("SELECT id FROM cards WHERE last_four = ?").all(partialId) as { id: string }[] : [];
+      const matches = [...byId, ...byName.filter(m => !byId.some(b => b.id === m.id)), ...byLast4.filter(m => !byId.some(b => b.id === m.id) && !byName.some(n => n.id === m.id))];
+      if (matches.length > 1) {
+        console.error(chalk.red(`Ambiguous ${table} ID "${partialId}" matches ${matches.length} cards:`));
+        matches.slice(0, 5).forEach(m => console.error(chalk.dim(`  - ${m.id.slice(0, 8)}`)));
+        exit(EXIT_CODES.NOT_FOUND);
+      }
+    }
+    console.error(chalk.red(`Could not resolve ${table} ID: ${partialId}`));
     exit(EXIT_CODES.NOT_FOUND);
   }
   return id;
@@ -164,12 +176,25 @@ providerCmd
 providerCmd
   .command("remove <name>")
   .description("Remove a provider")
-  .action((name: string) => {
+  .option("-y, --yes", "Skip confirmation prompt")
+  .action(async (name: string, opts: { yes?: boolean }) => {
     const provider = getProviderByName(name);
     if (!provider) {
       console.error(chalk.red(`Provider not found: ${name}`));
       exit(EXIT_CODES.ERROR);
     }
+
+    if (!opts.yes) {
+      const response = await new Promise<string>((resolve) => {
+        process.stdout.write(chalk.yellow(`Remove provider "${name}"? This cannot be undone. (y/N) `));
+        process.stdin.once("data", (d) => resolve(d.toString().trim().toLowerCase()));
+      });
+      if (response !== "y") {
+        console.log(chalk.dim("Aborted."));
+        return;
+      }
+    }
+
     deleteProvider(provider.id);
     removeProviderConfig(name);
 
@@ -498,7 +523,8 @@ cardCmd
   .command("close <id>")
   .description("Close a card permanently")
   .option("--dry-run", "Preview the action without executing")
-  .action(async (id: string, opts: { dryRun?: boolean }) => {
+  .option("-y, --yes", "Skip confirmation prompt")
+  .action(async (id: string, opts: { dryRun?: boolean; yes?: boolean }) => {
     const cardId = resolveId(id, "cards");
     const card = getCard(cardId);
     if (!card) {
@@ -517,6 +543,17 @@ cardCmd
       return;
     }
 
+    if (!opts.yes) {
+      const response = await new Promise<string>((resolve) => {
+        process.stdout.write(chalk.yellow(`Close card "${card.name}" (${card.id.slice(0, 8)})? This cannot be undone. (y/N) `));
+        process.stdin.once("data", (d) => resolve(d.toString().trim().toLowerCase()));
+      });
+      if (response !== "y") {
+        console.log(chalk.dim("Aborted."));
+        return;
+      }
+    }
+
     const providerConfig = { ...provider.config, ...(getProviderConfig(provider.name) || {}) };
     const instance = getProviderInstance(provider.type, providerConfig);
 
@@ -527,6 +564,91 @@ cardCmd
     } catch (e) {
       console.error(chalk.red(`Failed to close card: ${e instanceof Error ? e.message : String(e)}`));
       exit(EXIT_CODES.ERROR);
+    }
+  });
+
+cardCmd
+  .command("close-batch")
+  .description("Close multiple cards at once")
+  .requiredOption("-i, --ids <ids>", "Comma-separated card IDs or partial IDs")
+  .option("-y, --yes", "Skip confirmation prompt")
+  .option("--dry-run", "Preview the action without executing")
+  .action(async (opts: { ids: string; yes?: boolean; dryRun?: boolean }) => {
+    const cardIds = opts.ids.split(",").map((id) => id.trim());
+    const cards: Card[] = [];
+
+    for (const partialId of cardIds) {
+      const cardId = resolveId(partialId, "cards");
+      const card = getCard(cardId);
+      if (!card) {
+        console.error(chalk.red(`Card not found: ${partialId}`));
+        exit(EXIT_CODES.NOT_FOUND);
+      }
+      if (card.status === "closed") {
+        console.error(chalk.yellow(`Card already closed: ${card.id.slice(0, 8)} ${card.name}`));
+        continue;
+      }
+      cards.push(card);
+    }
+
+    if (cards.length === 0) {
+      console.log(chalk.yellow("No cards to close."));
+      return;
+    }
+
+    if (opts.dryRun) {
+      console.log(chalk.yellow(`[dry-run] Would close ${cards.length} cards:`));
+      for (const card of cards) {
+        console.log(chalk.yellow(`  - ${card.id.slice(0, 8)} ${card.name}`));
+      }
+      return;
+    }
+
+    if (!opts.yes) {
+      console.log(chalk.bold(`About to close ${cards.length} cards:`));
+      for (const card of cards) {
+        console.log(`  - ${card.id.slice(0, 8)} ${card.name} (${card.status})`);
+      }
+      const response = await new Promise<string>((resolve) => {
+        process.stdout.write(chalk.yellow(`\nClose ${cards.length} cards? This cannot be undone. (y/N) `));
+        process.stdin.once("data", (d) => resolve(d.toString().trim().toLowerCase()));
+      });
+      if (response !== "y") {
+        console.log(chalk.dim("Aborted."));
+        return;
+      }
+    }
+
+    const results: { card: Card; success: boolean; error?: string }[] = [];
+
+    for (const card of cards) {
+      const provider = getProvider(card.provider_id);
+      if (!provider) {
+        results.push({ card, success: false, error: "Provider not found" });
+        continue;
+      }
+
+      const providerConfig = { ...provider.config, ...(getProviderConfig(provider.name) || {}) };
+      const instance = getProviderInstance(provider.type, providerConfig);
+
+      try {
+        await instance.closeCard(card.external_id);
+        updateCard(card.id, { status: "closed" });
+        results.push({ card, success: true });
+      } catch (e) {
+        results.push({ card, success: false, error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+
+    const successCount = results.filter((r) => r.success).length;
+    const errorCount = results.filter((r) => !r.success).length;
+
+    console.log(chalk.green(`Closed ${successCount}/${cards.length} cards.`));
+    if (errorCount > 0) {
+      console.log(chalk.red(`Failed ${errorCount}:`));
+      for (const r of results.filter((r) => !r.success)) {
+        console.log(chalk.red(`  - ${r.card.id.slice(0, 8)} ${r.card.name}: ${r.error}`));
+      }
     }
   });
 
@@ -766,6 +888,81 @@ program
     }
     if (offset > 0 || txns.length === limit) {
       console.log(chalk.dim(`  (offset: ${offset}, showing ${txns.length})`));
+    }
+  });
+
+// ── Sync command ──────────────────────────────────────────────────────────
+
+program
+  .command("sync [card-id]")
+  .description("Sync transactions from provider for a card or all cards")
+  .option("-p, --provider <name>", "Provider name (uses default if omitted)")
+  .action(async (cardId: string | undefined, opts: { provider?: string }) => {
+    const config = loadConfig();
+    const providerName = opts.provider || config.default_provider;
+
+    if (!providerName) {
+      console.error(chalk.red("No provider specified and no default set. Use --provider or set a default."));
+      exit(EXIT_CODES.VALIDATION);
+    }
+
+    const providerRecord = getProviderByName(providerName);
+    if (!providerRecord) {
+      console.error(chalk.red(`Provider not found: ${providerName}`));
+      exit(EXIT_CODES.NOT_FOUND);
+    }
+
+    const providerConfig = { ...providerRecord.config, ...(getProviderConfig(providerName) || {}) };
+    const instance = getProviderInstance(providerRecord.type, providerConfig);
+
+    if (!instance.getTransactions) {
+      console.error(chalk.red(`Provider "${providerName}" does not support transaction sync.`));
+      exit(EXIT_CODES.VALIDATION);
+    }
+
+    const cards = cardId ? [getCard(resolveId(cardId, "cards"))!].filter(Boolean) : listCards();
+
+    let synced = 0;
+    let errors = 0;
+
+    for (const card of cards) {
+      if (!card) continue;
+
+      process.stdout.write(chalk.dim(`Syncing ${card.name}... `));
+
+      try {
+        const remoteTxns = await instance.getTransactions!(card.external_id);
+
+        // Import transactions not already in DB (by external_id)
+        for (const tx of remoteTxns) {
+          const existing = listTransactions({ card_id: card.id }).find((t) => t.external_id === tx.external_id);
+          if (!existing) {
+            createTransaction({
+              card_id: card.id,
+              provider_id: card.provider_id,
+              external_id: tx.external_id ?? undefined,
+              type: tx.type,
+              status: tx.status,
+              amount: tx.amount,
+              currency: tx.currency,
+              merchant: tx.merchant ?? undefined,
+              description: tx.description ?? undefined,
+              metadata: tx.metadata ?? {},
+            });
+            synced++;
+          }
+        }
+        process.stdout.write(chalk.green("✓") + chalk.dim(` (${remoteTxns.length} txns)\n`));
+      } catch (e) {
+        errors++;
+        process.stdout.write(chalk.red("✗") + chalk.dim(` (${e instanceof Error ? e.message : String(e)})\n`));
+      }
+    }
+
+    if (errors > 0) {
+      console.log(chalk.yellow(`\nSynced ${synced} new transactions. ${errors} card(s) had errors.`));
+    } else {
+      console.log(chalk.green(`\nSynced ${synced} new transactions from ${cards.length} card(s).`));
     }
   });
 
@@ -1096,7 +1293,8 @@ program
   .alias("rm")
   .alias("uninstall")
   .description("Remove a record. Type: provider | card")
-  .action((type: string, name: string) => {
+  .option("-y, --yes", "Skip confirmation prompt")
+  .action(async (type: string, name: string, opts: { yes?: boolean }) => {
     try {
       switch (type.toLowerCase()) {
         case "provider": {
@@ -1104,6 +1302,16 @@ program
           if (!provider) {
             console.error(chalk.red(`Provider not found: ${name}`));
             exit(EXIT_CODES.ERROR);
+          }
+          if (!opts.yes) {
+            const response = await new Promise<string>((resolve) => {
+              process.stdout.write(chalk.yellow(`Remove provider "${name}"? This cannot be undone. (y/N) `));
+              process.stdin.once("data", (d) => resolve(d.toString().trim().toLowerCase()));
+            });
+            if (response !== "y") {
+              console.log(chalk.dim("Aborted."));
+              return;
+            }
           }
           deleteProvider(provider.id);
           removeProviderConfig(name);
@@ -1117,8 +1325,18 @@ program
           const cardId = resolvePartialId(db, "cards", name) ?? name;
           const card = getCard(cardId);
           if (!card) { console.error(chalk.red(`Card not found: ${name}`)); exit(EXIT_CODES.ERROR); }
+          if (!opts.yes) {
+            const response = await new Promise<string>((resolve) => {
+              process.stdout.write(chalk.yellow(`Remove card "${card.name}" (${card.id.slice(0, 8)})? This cannot be undone. (y/N) `));
+              process.stdin.once("data", (d) => resolve(d.toString().trim().toLowerCase()));
+            });
+            if (response !== "y") {
+              console.log(chalk.dim("Aborted."));
+              return;
+            }
+          }
           updateCard(cardId, { status: "closed" });
-          console.log(chalk.green(`✓ Card ${cardId.slice(0, 8)} closed`));
+          console.log(chalk.green(`✓ Card ${cardId.slice(0, 8)} removed`));
           break;
         }
         default:
