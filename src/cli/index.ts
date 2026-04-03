@@ -724,6 +724,68 @@ program
     }
   });
 
+// ── Stats command ─────────────────────────────────────────────────────────
+
+cardCmd
+  .command("stats [id]")
+  .description("Show spending statistics for a card (or all cards)")
+  .option("-p, --period <days>", "Stats period in days", "30")
+  .action((id: string | undefined, opts: { period?: string }) => {
+    const period = parseInt(opts.period || "30", 10);
+    const since = new Date(Date.now() - period * 24 * 60 * 60 * 1000).toISOString();
+
+    let cardIds: string[] = [];
+    if (id) {
+      cardIds = [resolveId(id, "cards")];
+    } else {
+      cardIds = listCards().map((c) => c.id);
+    }
+
+    const globalOpts = program.opts();
+    const useJson = globalOpts["json"];
+
+    for (const cardId of cardIds) {
+      const card = getCard(cardId);
+      if (!card) continue;
+
+      const txns = listTransactions({ card_id: cardId, limit: 10000 });
+      const periodTxns = txns.filter((tx) => tx.created_at >= since && (tx.type === "charge" || tx.type === "payment"));
+
+      const totalSpent = periodTxns.filter((tx) => tx.type === "charge").reduce((sum, tx) => sum + tx.amount, 0);
+      const totalRefunds = periodTxns.filter((tx) => tx.type === "refund").reduce((sum, tx) => sum + tx.amount, 0);
+      const netSpent = totalSpent - totalRefunds;
+      const txnCount = periodTxns.length;
+      const avgTxn = txnCount > 0 ? netSpent / txnCount : 0;
+
+      const merchantSpend: Record<string, number> = {};
+      for (const tx of periodTxns) {
+        if (tx.type === "charge" && tx.merchant) {
+          merchantSpend[tx.merchant] = (merchantSpend[tx.merchant] || 0) + tx.amount;
+        }
+      }
+      const topMerchants = Object.entries(merchantSpend)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([m, amt]) => ({ merchant: m, amount: amt }));
+
+      if (useJson) {
+        printJson({ card: card.name, period_days: period, total_spent: netSpent, transaction_count: txnCount, average_transaction: avgTxn, top_merchants: topMerchants });
+        continue;
+      }
+
+      console.log(chalk.bold(`\nCard: ${card.name} (${card.id.slice(0, 8)})`));
+      console.log(`  Period: last ${period} days`);
+      console.log(`  Net spent: ${chalk.green("$" + netSpent.toFixed(2))}`);
+      console.log(`  Transactions: ${txnCount} (avg ${chalk.dim("$" + avgTxn.toFixed(2))})`);
+      if (topMerchants.length > 0) {
+        console.log(chalk.dim("  Top merchants:"));
+        for (const { merchant, amount } of topMerchants) {
+          console.log(chalk.dim(`    ${merchant}: $${amount.toFixed(2)}`));
+        }
+      }
+    }
+  });
+
 // ── Doctor command ─────────────────────────────────────────────────────────
 
 program
