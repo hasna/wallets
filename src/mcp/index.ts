@@ -4,7 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { getDatabase, resolvePartialId } from "../db/database.js";
 import { listProviders, getProvider, getProviderByName, ensureProvider } from "../db/providers.js";
-import { createCardRecord, listCards, getCard, updateCard, updateCardBalance } from "../db/cards.js";
+import { createCardRecord, listCards, getCard, updateCard, updateCardBalance, getCardByIdempotencyKey } from "../db/cards.js";
 import { listTransactions } from "../db/transactions.js";
 import { registerAgent, listAgents, heartbeatAgent, setAgentFocus } from "../db/agents.js";
 import { getProviderInstance } from "../providers/index.js";
@@ -43,9 +43,18 @@ server.tool(
     provider: z.string().optional().describe("Provider name (uses default if omitted)"),
     currency: z.string().optional().describe("Currency code (default: USD)"),
     agent_id: z.string().optional().describe("Agent name to assign the card to"),
+    idempotency_key: z.string().optional().describe("Unique key to prevent duplicate card creation on retries"),
   },
   async (params) => {
     try {
+      // Check for existing card with same idempotency key
+      if (params.idempotency_key) {
+        const existing = getCardByIdempotencyKey(params.idempotency_key);
+        if (existing) {
+          return { content: [{ type: "text" as const, text: `existing: ${formatCard(existing)}` }] };
+        }
+      }
+
       const providerName = params.provider || getDefaultProvider()?.name;
       if (!providerName) {
         return { content: [{ type: "text" as const, text: formatError(new Error("No provider specified and no default set. Use register_provider first.")) }], isError: true };
@@ -85,6 +94,7 @@ server.tool(
         spending_limit: result.spending_limit,
         agent_id: agentId,
         metadata: result.funding_url ? { funding_url: result.funding_url } : {},
+        idempotency_key: params.idempotency_key ?? null,
       });
 
       let text = `created: ${formatCard(card)}`;
@@ -226,6 +236,66 @@ server.tool(
       updateCard(cardId, { status: "closed" });
 
       return { content: [{ type: "text" as const, text: `Card closed: ${card.id.slice(0, 8)} ${card.name}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  "freeze_card",
+  "Freeze a card temporarily",
+  {
+    card_id: z.string().describe("Card ID"),
+  },
+  async (params) => {
+    try {
+      const cardId = resolveId(params.card_id, "cards");
+      const card = getCard(cardId);
+      if (!card) throw new Error(`Card not found: ${params.card_id}`);
+      if (card.status !== "active") throw new Error(`Card is not active: ${card.status}`);
+
+      const provider = getProvider(card.provider_id);
+      if (!provider) throw new Error("Provider not found for card");
+
+      const providerConfig = { ...provider.config, ...(getProviderConfig(provider.name) || {}) };
+      const instance = getProviderInstance(provider.type, providerConfig);
+      if (instance.freezeCard) {
+        await instance.freezeCard(card.external_id);
+      }
+      updateCard(cardId, { status: "frozen" });
+
+      return { content: [{ type: "text" as const, text: `Card frozen: ${card.id.slice(0, 8)} ${card.name}` }] };
+    } catch (e) {
+      return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
+    }
+  }
+);
+
+server.tool(
+  "unfreeze_card",
+  "Unfreeze a frozen card",
+  {
+    card_id: z.string().describe("Card ID"),
+  },
+  async (params) => {
+    try {
+      const cardId = resolveId(params.card_id, "cards");
+      const card = getCard(cardId);
+      if (!card) throw new Error(`Card not found: ${params.card_id}`);
+      if (card.status !== "frozen") throw new Error(`Card is not frozen: ${card.status}`);
+
+      const provider = getProvider(card.provider_id);
+      if (!provider) throw new Error("Provider not found for card");
+
+      const providerConfig = { ...provider.config, ...(getProviderConfig(provider.name) || {}) };
+      const instance = getProviderInstance(provider.type, providerConfig);
+      if (instance.unfreezeCard) {
+        await instance.unfreezeCard(card.external_id);
+      }
+      updateCard(cardId, { status: "active" });
+
+      return { content: [{ type: "text" as const, text: `Card unfrozen: ${card.id.slice(0, 8)} ${card.name}` }] };
     } catch (e) {
       return { content: [{ type: "text" as const, text: formatError(e) }], isError: true };
     }

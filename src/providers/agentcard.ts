@@ -65,6 +65,7 @@ export class AgentCardProvider implements WalletProvider {
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       funding_url: data.funding_url,
+      idempotency_key: null,
     };
   }
 
@@ -95,6 +96,7 @@ export class AgentCardProvider implements WalletProvider {
       expires_at: null,
       created_at: c.created_at || new Date().toISOString(),
       updated_at: new Date().toISOString(),
+      idempotency_key: null,
     }));
   }
 
@@ -132,6 +134,7 @@ export class AgentCardProvider implements WalletProvider {
       cvv: data.cvv,
       exp_month: data.exp_month,
       exp_year: data.exp_year,
+      idempotency_key: null,
     };
   }
 

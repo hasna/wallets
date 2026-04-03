@@ -25,6 +25,7 @@ export interface CreateCardRecord {
   agent_id?: string | null;
   metadata?: Record<string, unknown>;
   expires_at?: string | null;
+  idempotency_key?: string | null;
 }
 
 export function createCardRecord(input: CreateCardRecord, db?: Database): Card {
@@ -32,8 +33,8 @@ export function createCardRecord(input: CreateCardRecord, db?: Database): Card {
   const id = uuid();
 
   d.run(
-    `INSERT INTO cards (id, provider_id, external_id, name, last_four, brand, status, currency, balance, funded_amount, spending_limit, agent_id, metadata, expires_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO cards (id, provider_id, external_id, name, last_four, brand, status, currency, balance, funded_amount, spending_limit, agent_id, metadata, expires_at, idempotency_key)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       input.provider_id,
@@ -49,6 +50,7 @@ export function createCardRecord(input: CreateCardRecord, db?: Database): Card {
       input.agent_id ?? null,
       JSON.stringify(input.metadata || {}),
       input.expires_at ?? null,
+      input.idempotency_key ?? null,
     ]
   );
 
@@ -64,6 +66,12 @@ export function getCard(id: string, db?: Database): Card | null {
 export function getCardByExternalId(externalId: string, providerId: string, db?: Database): Card | null {
   const d = db || getDatabase();
   const row = d.query("SELECT * FROM cards WHERE external_id = ? AND provider_id = ?").get(externalId, providerId) as CardRow | null;
+  return row ? rowToCard(row) : null;
+}
+
+export function getCardByIdempotencyKey(idempotencyKey: string, db?: Database): Card | null {
+  const d = db || getDatabase();
+  const row = d.query("SELECT * FROM cards WHERE idempotency_key = ?").get(idempotencyKey) as CardRow | null;
   return row ? rowToCard(row) : null;
 }
 

@@ -45,6 +45,7 @@ export interface Card {
   expires_at: string | null;
   created_at: string;
   updated_at: string;
+  idempotency_key: string | null;
 }
 
 export interface CardDetails extends Card {
@@ -107,6 +108,7 @@ export interface CardRow {
   expires_at: string | null;
   created_at: string;
   updated_at: string;
+  idempotency_key: string | null;
 }
 
 export interface TransactionRow {
@@ -192,6 +194,8 @@ export interface WalletProvider {
   getCardDetails(externalId: string): Promise<CardDetails>;
   getBalance(externalId: string): Promise<{ balance: number; currency: Currency }>;
   closeCard(externalId: string): Promise<void>;
+  freezeCard?(externalId: string): Promise<void>;
+  unfreezeCard?(externalId: string): Promise<void>;
   getTransactions?(externalId: string): Promise<Transaction[]>;
 }
 

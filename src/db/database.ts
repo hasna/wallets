@@ -81,6 +81,10 @@ const MIGRATIONS: { id: number; sql: string }[] = [
     id: 2,
     sql: `ALTER TABLE agents ADD COLUMN active_project_id TEXT;`,
   },
+  {
+    id: 3,
+    sql: `ALTER TABLE cards ADD COLUMN idempotency_key TEXT; CREATE UNIQUE INDEX IF NOT EXISTS idx_cards_idempotency ON cards(idempotency_key) WHERE idempotency_key IS NOT NULL;`,
+  },
 ];
 
 function runMigrations(db: Database): void {
