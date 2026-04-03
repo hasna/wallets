@@ -1,0 +1,17 @@
+#compdef wallets
+
+_wallets() {
+  local -a commands
+  commands=(
+    'provider:Manage wallet providers'
+    'card:Manage virtual cards'
+    'agent:Manage AI agents'
+    'doctor:Run health diagnostics'
+    'transaction:View transaction history'
+    'help:Show help'
+  )
+
+  _describe 'command' commands
+}
+
+_wallets
