@@ -337,6 +337,8 @@ cardCmd
       const name = names[i] || `Batch Card ${i + 1}`;
       const idempotencyKey = opts.idempotencyKey ? `${opts.idempotencyKey}-${i}` : undefined;
 
+      process.stdout.write(chalk.dim(`[${i + 1}/${amounts.length}] Creating ${name}... `));
+
       try {
         // Check idempotency
         if (idempotencyKey) {
@@ -370,8 +372,10 @@ cardCmd
           idempotency_key: idempotencyKey ?? null,
         });
         results.push(card);
+        process.stdout.write(chalk.green("✓\n"));
       } catch (e) {
         errors.push(`${name}: ${e instanceof Error ? e.message : String(e)}`);
+        process.stdout.write(chalk.red("✗\n"));
       }
     }
 
@@ -749,9 +753,9 @@ cardCmd
       if (!card) continue;
 
       const txns = listTransactions({ card_id: cardId, limit: 10000 });
-      const periodTxns = txns.filter((tx) => tx.created_at >= since && (tx.type === "charge" || tx.type === "payment"));
+      const periodTxns = txns.filter((tx) => tx.created_at >= since && (tx.type === "purchase" || tx.type === "withdrawal"));
 
-      const totalSpent = periodTxns.filter((tx) => tx.type === "charge").reduce((sum, tx) => sum + tx.amount, 0);
+      const totalSpent = periodTxns.filter((tx) => tx.type === "purchase" || tx.type === "withdrawal").reduce((sum, tx) => sum + tx.amount, 0);
       const totalRefunds = periodTxns.filter((tx) => tx.type === "refund").reduce((sum, tx) => sum + tx.amount, 0);
       const netSpent = totalSpent - totalRefunds;
       const txnCount = periodTxns.length;
@@ -759,7 +763,7 @@ cardCmd
 
       const merchantSpend: Record<string, number> = {};
       for (const tx of periodTxns) {
-        if (tx.type === "charge" && tx.merchant) {
+        if ((tx.type === "purchase" || tx.type === "withdrawal") && tx.merchant) {
           merchantSpend[tx.merchant] = (merchantSpend[tx.merchant] || 0) + tx.amount;
         }
       }
