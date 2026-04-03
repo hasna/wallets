@@ -404,18 +404,24 @@ cardCmd
   .option("-s, --status <status>", "Filter by status")
   .option("-p, --provider <name>", "Filter by provider")
   .option("--agent <name>", "Filter by agent")
+  .option("-c, --category <cat>", "Filter by category/profile")
   .option("-f, --format <type>", "Output format: table, json, csv", "table")
-  .action((opts: { status?: string; provider?: string; agent?: string; format?: string }) => {
+  .action((opts: { status?: string; provider?: string; agent?: string; category?: string; format?: string }) => {
     let providerId: string | undefined;
     if (opts.provider) {
       const p = getProviderByName(opts.provider);
       if (p) providerId = p.id;
     }
 
-    const cards = listCards({
+    const allCards = listCards({
       status: opts.status as Card["status"],
       provider_id: providerId,
     });
+
+    // Filter by category if specified
+    const cards = opts.category
+      ? allCards.filter((c) => c.metadata?.category === opts.category)
+      : allCards;
 
     const globalOpts = program.opts();
     const format = opts.format || (globalOpts["json"] ? "json" : "table");
@@ -426,9 +432,9 @@ cardCmd
     }
 
     if (format === "csv") {
-      console.log("id,status,last_four,balance,currency,name,provider_id,created_at");
+      console.log("id,status,last_four,balance,currency,name,category,provider_id,created_at");
       for (const card of cards) {
-        console.log(`${card.id},${card.status},${card.last_four || ""},${card.balance},${card.currency},"${card.name}",${card.provider_id},${card.created_at}`);
+        console.log(`${card.id},${card.status},${card.last_four || ""},${card.balance},${card.currency},"${card.name}","${card.metadata?.category || ""}",${card.provider_id},${card.created_at}`);
       }
       return;
     }
@@ -441,8 +447,7 @@ cardCmd
     if (shouldOutput()) {
       console.log(chalk.bold("Cards:"));
       for (const card of cards) {
-        const last4 = card.last_four ? `*${card.last_four}` : "----";
-        console.log(`  ${chalk.dim(card.id.slice(0, 8))} ${colorStatus(card.status).padEnd(18)} ${last4.padEnd(6)} $${card.balance.toFixed(2).padStart(10)} ${card.name}`);
+        console.log(`  ${formatCard(card)}`);
       }
     }
   });
@@ -626,6 +631,42 @@ cardCmd
 
     updateCard(cardId, { name });
     console.log(chalk.green(`Card renamed to "${name}"`));
+  });
+
+// ── Profile command ────────────────────────────────────────────────────────
+
+cardCmd
+  .command("profile <id> [category]")
+  .description("Get or set card category/profile (e.g. business, personal, travel)")
+  .action(async (id: string, category?: string) => {
+    const cardId = resolveId(id, "cards");
+    const card = getCard(cardId);
+    if (!card) {
+      console.error(chalk.red(`Card not found: ${id}`));
+      exit(EXIT_CODES.NOT_FOUND);
+    }
+
+    if (!category) {
+      // Get profile - show current category
+      const currentCategory = card.metadata?.category || null;
+      if (currentCategory) {
+        console.log(`${chalk.bold("Category:")} ${currentCategory}`);
+      } else {
+        console.log(chalk.dim("No category set. Usage: card profile <id> <category>"));
+      }
+      return;
+    }
+
+    // Set profile
+    const trimmedCategory = category.trim().toLowerCase();
+    if (!trimmedCategory) {
+      console.error(chalk.red("Category cannot be empty"));
+      exit(EXIT_CODES.VALIDATION);
+    }
+
+    const updatedMetadata = { ...card.metadata, category: trimmedCategory };
+    updateCard(cardId, { metadata: updatedMetadata });
+    console.log(chalk.green(`Card category set to "${trimmedCategory}"`));
   });
 
 // ── Balance command ────────────────────────────────────────────────────────
@@ -1136,7 +1177,7 @@ _wallets_completions()
       return 0
       ;;
     card)
-      COMPREPLY=( $(compgen -W "create create-batch list details close freeze unfreeze rename" -- "\${cur}") )
+      COMPREPLY=( $(compgen -W "create create-batch list details close freeze unfreeze rename profile" -- "\${cur}") )
       return 0
       ;;
     wallets)
@@ -1200,7 +1241,7 @@ complete -c wallets -a agent -d "Manage agents"
 complete -c wallets -a feedback -d "Send feedback"
 complete -c wallets -a audit -d "View audit log"
 complete -c wallets -a completions -d "Generate shell completions"
-complete -c wallets -n "__fish_seen_subcommand_from card" -a "create create-batch list details close freeze unfreeze rename" -d "Card commands"`);
+complete -c wallets -n "__fish_seen_subcommand_from card" -a "create create-batch list details close freeze unfreeze rename profile" -d "Card commands"`);
   });
 
 // ── Audit command ───────────────────────────────────────────────────────────
