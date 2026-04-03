@@ -751,6 +751,114 @@ program
     }
   });
 
+
+// ── Init command ───────────────────────────────────────────────────────────
+
+import { createInterface } from "readline";
+
+function prompt(question: string): Promise<string> {
+  return new Promise((resolve) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+}
+
+function promptSecret(question: string): Promise<string> {
+  return new Promise((resolve) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+    rl.question(question, (answer) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+}
+
+async function runInit(): Promise<void> {
+  const configDir = getConfigDir();
+  const configPath = getConfigPath();
+
+  console.log(chalk.bold("\n🔖 Wallets Init\n"));
+  console.log(`Config directory: ${chalk.dim(configDir)}`);
+
+  if (existsSync(configPath)) {
+    const existing = loadConfig();
+    if (existing.providers && Object.keys(existing.providers).length > 0) {
+      console.log(chalk.yellow("\nWallets is already configured.\n"));
+      const overwrite = await prompt("Overwrite existing config? (y/N): ");
+      if (overwrite.toLowerCase() !== "y") {
+        console.log(chalk.dim("Aborted."));
+        return;
+      }
+    }
+  }
+
+  console.log(chalk.dim("\nAvailable providers: agentcard\n"));
+
+  const providerType = await prompt("Provider type [agentcard]: ");
+  const type = providerType.trim() || "agentcard";
+
+  if (type !== "agentcard") {
+    console.error(chalk.red(`Unknown provider type: ${type}`));
+    exit(EXIT_CODES.ERROR);
+    return;
+  }
+
+  const jwt = await promptSecret("AgentCard JWT token: ");
+  if (!jwt) {
+    console.error(chalk.red("JWT token is required."));
+    exit(EXIT_CODES.VALIDATION);
+    return;
+  }
+
+  const baseUrl = await prompt("AgentCard base URL [https://api.agentcard.sh]: ");
+  const url = baseUrl.trim() || "https://api.agentcard.sh";
+
+  const defaultCurrency = await prompt("Default currency [USD]: ");
+  const currency = defaultCurrency.trim() || "USD";
+
+  const config: WalletsConfig = {
+    default_provider: type,
+    default_currency: currency,
+    providers: {
+      [type]: {
+        jwt,
+        baseUrl: url,
+      },
+    },
+  };
+
+  try {
+    mkdirSync(configDir, { recursive: true });
+    saveConfig(config);
+    console.log(chalk.green("\n✓ Configuration saved.\n"));
+  } catch (e) {
+    console.error(chalk.red(`Failed to save config: ${e instanceof Error ? e.message : String(e)}`));
+    exit(EXIT_CODES.ERROR);
+  }
+
+  const result = runDoctor(true);
+  if (result.healthy) {
+    console.log(chalk.green("Setup complete! Run ") + chalk.bold("wallets doctor") + chalk.green(" to verify.\n"));
+  } else {
+    console.log(chalk.yellow("\nSetup complete, but some checks failed. Run ") + chalk.bold("wallets doctor --fix") + chalk.yellow(" for details.\n"));
+  }
+}
+
+program
+  .command("init")
+  .description("Initialize wallets configuration (interactive wizard)")
+  .action(async () => {
+    try {
+      await runInit();
+    } catch (e) {
+      console.error(chalk.red(`Init failed: ${e instanceof Error ? e.message : String(e)}`));
+      exit(EXIT_CODES.ERROR);
+    }
+  });
+
 // ── Ping command ───────────────────────────────────────────────────────────
 
 program
