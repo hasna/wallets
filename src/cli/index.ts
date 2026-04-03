@@ -960,7 +960,7 @@ _wallets_completions()
       return 0
       ;;
     card)
-      COMPREPLY=( $(compgen -W "create create-batch list details close freeze unfreeze" -- "\${cur}") )
+      COMPREPLY=( $(compgen -W "create create-batch list details close freeze unfreeze rename" -- "\${cur}") )
       return 0
       ;;
     wallets)
@@ -1024,7 +1024,7 @@ complete -c wallets -a agent -d "Manage agents"
 complete -c wallets -a feedback -d "Send feedback"
 complete -c wallets -a audit -d "View audit log"
 complete -c wallets -a completions -d "Generate shell completions"
-complete -c wallets -n "__fish_seen_subcommand_from card" -a "create create-batch list details close freeze unfreeze" -d "Card commands"`);
+complete -c wallets -n "__fish_seen_subcommand_from card" -a "create create-batch list details close freeze unfreeze rename" -d "Card commands"`);
   });
 
 // ── Audit command ───────────────────────────────────────────────────────────
