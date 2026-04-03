@@ -30,30 +30,45 @@ export function formatDoctorCheck(check: DoctorCheck): string {
   return `${icon} ${check.name}: ${check.message}`;
 }
 
-export function formatError(error: unknown): string {
+export function formatError(error: unknown, includeStack = false): string {
+  return JSON.stringify(formatErrorStructured(error, includeStack));
+}
+
+export interface StructuredError {
+  timestamp: string;
+  type: string;
+  code: string;
+  message: string;
+  suggestion?: string;
+  stack?: string;
+}
+
+export function formatErrorStructured(error: unknown, includeStack = false): StructuredError {
+  const base = { timestamp: new Date().toISOString() };
+
   if (error instanceof ProviderNotFoundError) {
-    return JSON.stringify({ code: ProviderNotFoundError.code, message: error.message, suggestion: ProviderNotFoundError.suggestion });
+    return { ...base, type: "ProviderNotFoundError", code: ProviderNotFoundError.code, message: error.message, suggestion: ProviderNotFoundError.suggestion, ...(includeStack && error.stack ? { stack: error.stack } : {}) };
   }
   if (error instanceof CardNotFoundError) {
-    return JSON.stringify({ code: CardNotFoundError.code, message: error.message, suggestion: CardNotFoundError.suggestion });
+    return { ...base, type: "CardNotFoundError", code: CardNotFoundError.code, message: error.message, suggestion: CardNotFoundError.suggestion, ...(includeStack && error.stack ? { stack: error.stack } : {}) };
   }
   if (error instanceof ProviderError) {
-    return JSON.stringify({ code: ProviderError.code, message: error.message, suggestion: ProviderError.suggestion });
+    return { ...base, type: "ProviderError", code: ProviderError.code, message: error.message, suggestion: ProviderError.suggestion, ...(includeStack && error.stack ? { stack: error.stack } : {}) };
   }
   if (error instanceof InsufficientFundsError) {
-    return JSON.stringify({ code: InsufficientFundsError.code, message: error.message, suggestion: InsufficientFundsError.suggestion });
+    return { ...base, type: "InsufficientFundsError", code: InsufficientFundsError.code, message: error.message, suggestion: InsufficientFundsError.suggestion, ...(includeStack && error.stack ? { stack: error.stack } : {}) };
   }
   if (error instanceof ConfigError) {
-    return JSON.stringify({ code: ConfigError.code, message: error.message, suggestion: ConfigError.suggestion });
+    return { ...base, type: "ConfigError", code: ConfigError.code, message: error.message, suggestion: ConfigError.suggestion, ...(includeStack && error.stack ? { stack: error.stack } : {}) };
   }
   if (error instanceof AgentNotFoundError) {
-    return JSON.stringify({ code: AgentNotFoundError.code, message: error.message, suggestion: AgentNotFoundError.suggestion });
+    return { ...base, type: "AgentNotFoundError", code: AgentNotFoundError.code, message: error.message, suggestion: AgentNotFoundError.suggestion, ...(includeStack && error.stack ? { stack: error.stack } : {}) };
   }
   if (error instanceof WalletError) {
-    return JSON.stringify({ code: WalletError.code, message: error.message, suggestion: WalletError.suggestion });
+    return { ...base, type: "WalletError", code: WalletError.code, message: error.message, suggestion: WalletError.suggestion, ...(includeStack && error.stack ? { stack: error.stack } : {}) };
   }
   if (error instanceof Error) {
-    return JSON.stringify({ code: "UNKNOWN_ERROR", message: error.message });
+    return { ...base, type: error.name || "Error", code: "UNKNOWN_ERROR", message: error.message, ...(includeStack && error.stack ? { stack: error.stack } : {}) };
   }
-  return JSON.stringify({ code: "UNKNOWN_ERROR", message: String(error) });
+  return { ...base, type: "Unknown", code: "UNKNOWN_ERROR", message: String(error) };
 }
