@@ -605,6 +605,23 @@ cardCmd
     }
   });
 
+// ── Rename command ─────────────────────────────────────────────────────────
+
+cardCmd
+  .command("rename <id> <name>")
+  .description("Rename a card")
+  .action(async (id: string, name: string) => {
+    const cardId = resolveId(id, "cards");
+    const card = getCard(cardId);
+    if (!card) {
+      console.error(chalk.red(`Card not found: ${id}`));
+      exit(EXIT_CODES.NOT_FOUND);
+    }
+
+    updateCard(cardId, { name });
+    console.log(chalk.green(`Card renamed to "${name}"`));
+  });
+
 // ── Balance command ────────────────────────────────────────────────────────
 
 program
