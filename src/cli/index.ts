@@ -13,17 +13,10 @@ import { loadConfig, saveConfig, setProviderConfig, removeProviderConfig, getPro
 import { runDoctor } from "../lib/doctor.js";
 import { formatCard, formatProvider, formatTransaction } from "../lib/format.js";
 import type { Card } from "../types/index.js";
+import { EXIT_CODES } from "../types/index.js";
 import { readFileSync } from "fs";
 import { join } from "path";
 import { execSync } from "child_process";
-
-// Exit codes for AI agent compatibility
-const EXIT = {
-  SUCCESS: 0,
-  ERROR: 1,
-  NOT_FOUND: 2,
-  VALIDATION: 3,
-} as const;
 
 function exit(code: number, msg?: string): never {
   if (msg) console.error(msg);
@@ -49,7 +42,7 @@ function resolveId(partialId: string, table = "cards"): string {
   }
   if (!id) {
     console.error(chalk.red(`Could not resolve ID: ${partialId}`));
-    exit(EXIT.NOT_FOUND);
+    exit(EXIT_CODES.NOT_FOUND);
   }
   return id;
 }
@@ -173,7 +166,7 @@ providerCmd
     const provider = getProviderByName(name);
     if (!provider) {
       console.error(chalk.red(`Provider not found: ${name}`));
-      exit(EXIT.ERROR);
+      exit(EXIT_CODES.ERROR);
     }
     deleteProvider(provider.id);
     removeProviderConfig(name);
@@ -221,13 +214,13 @@ cardCmd
 
     if (!providerName) {
       console.error(chalk.red("No provider specified and no default set. Use --provider or 'wallets provider add --default'."));
-      exit(EXIT.VALIDATION);
+      exit(EXIT_CODES.VALIDATION);
     }
 
     const providerRecord = getProviderByName(providerName);
     if (!providerRecord) {
       console.error(chalk.red(`Provider not found: ${providerName}`));
-      exit(EXIT.NOT_FOUND);
+      exit(EXIT_CODES.NOT_FOUND);
     }
 
     if (opts.dryRun) {
@@ -279,7 +272,7 @@ cardCmd
       }
     } catch (e) {
       console.error(chalk.red(`Failed to create card: ${e instanceof Error ? e.message : String(e)}`));
-      exit(EXIT.ERROR);
+      exit(EXIT_CODES.ERROR);
     }
   });
 
@@ -299,13 +292,13 @@ cardCmd
 
     if (!providerName) {
       console.error(chalk.red("No provider specified and no default set. Use --provider or 'wallets provider add --default'."));
-      exit(EXIT.VALIDATION);
+      exit(EXIT_CODES.VALIDATION);
     }
 
     const providerRecord = getProviderByName(providerName);
     if (!providerRecord) {
       console.error(chalk.red(`Provider not found: ${providerName}`));
-      exit(EXIT.NOT_FOUND);
+      exit(EXIT_CODES.NOT_FOUND);
     }
 
     const amounts = opts.amounts.split(",").map((a) => parseFloat(a.trim()));
@@ -314,7 +307,7 @@ cardCmd
 
     if (amounts.some(isNaN)) {
       console.error(chalk.red("Invalid amounts. Use comma-separated numbers (e.g., 10,20,50)"));
-      exit(EXIT.VALIDATION);
+      exit(EXIT_CODES.VALIDATION);
     }
 
     if (opts.dryRun) {
@@ -456,13 +449,13 @@ cardCmd
     const card = getCard(cardId);
     if (!card) {
       console.error(chalk.red(`Card not found: ${id}`));
-      exit(EXIT.ERROR);
+      exit(EXIT_CODES.ERROR);
     }
 
     const provider = getProvider(card.provider_id);
     if (!provider) {
       console.error(chalk.red(`Provider not found for card`));
-      exit(EXIT.ERROR);
+      exit(EXIT_CODES.ERROR);
     }
 
     const providerConfig = { ...provider.config, ...(getProviderConfig(provider.name) || {}) };
@@ -486,7 +479,7 @@ cardCmd
       }
     } catch (e) {
       console.error(chalk.red(`Failed to get details: ${e instanceof Error ? e.message : String(e)}`));
-      exit(EXIT.ERROR);
+      exit(EXIT_CODES.ERROR);
     }
   });
 
@@ -499,13 +492,13 @@ cardCmd
     const card = getCard(cardId);
     if (!card) {
       console.error(chalk.red(`Card not found: ${id}`));
-      exit(EXIT.NOT_FOUND);
+      exit(EXIT_CODES.NOT_FOUND);
     }
 
     const provider = getProvider(card.provider_id);
     if (!provider) {
       console.error(chalk.red(`Provider not found for card`));
-      exit(EXIT.ERROR);
+      exit(EXIT_CODES.ERROR);
     }
 
     if (opts.dryRun) {
@@ -522,7 +515,7 @@ cardCmd
       console.log(chalk.green(`Card closed: ${card.id.slice(0, 8)} ${card.name}`));
     } catch (e) {
       console.error(chalk.red(`Failed to close card: ${e instanceof Error ? e.message : String(e)}`));
-      exit(EXIT.ERROR);
+      exit(EXIT_CODES.ERROR);
     }
   });
 
@@ -535,12 +528,12 @@ cardCmd
     const card = getCard(cardId);
     if (!card) {
       console.error(chalk.red(`Card not found: ${id}`));
-      exit(EXIT.NOT_FOUND);
+      exit(EXIT_CODES.NOT_FOUND);
     }
 
     if (card.status !== "active") {
       console.error(chalk.red(`Card is not active: ${card.status}`));
-      exit(EXIT.VALIDATION);
+      exit(EXIT_CODES.VALIDATION);
     }
 
     if (opts.dryRun) {
@@ -551,7 +544,7 @@ cardCmd
     const provider = getProvider(card.provider_id);
     if (!provider) {
       console.error(chalk.red(`Provider not found for card`));
-      exit(EXIT.ERROR);
+      exit(EXIT_CODES.ERROR);
     }
 
     const providerConfig = { ...provider.config, ...(getProviderConfig(provider.name) || {}) };
@@ -565,7 +558,7 @@ cardCmd
       console.log(chalk.green(`Card frozen: ${card.id.slice(0, 8)} ${card.name}`));
     } catch (e) {
       console.error(chalk.red(`Failed to freeze card: ${e instanceof Error ? e.message : String(e)}`));
-      exit(EXIT.ERROR);
+      exit(EXIT_CODES.ERROR);
     }
   });
 
@@ -578,12 +571,12 @@ cardCmd
     const card = getCard(cardId);
     if (!card) {
       console.error(chalk.red(`Card not found: ${id}`));
-      exit(EXIT.NOT_FOUND);
+      exit(EXIT_CODES.NOT_FOUND);
     }
 
     if (card.status !== "frozen") {
       console.error(chalk.red(`Card is not frozen: ${card.status}`));
-      exit(EXIT.VALIDATION);
+      exit(EXIT_CODES.VALIDATION);
     }
 
     if (opts.dryRun) {
@@ -594,7 +587,7 @@ cardCmd
     const provider = getProvider(card.provider_id);
     if (!provider) {
       console.error(chalk.red(`Provider not found for card`));
-      exit(EXIT.ERROR);
+      exit(EXIT_CODES.ERROR);
     }
 
     const providerConfig = { ...provider.config, ...(getProviderConfig(provider.name) || {}) };
@@ -608,7 +601,7 @@ cardCmd
       console.log(chalk.green(`Card unfrozen: ${card.id.slice(0, 8)} ${card.name}`));
     } catch (e) {
       console.error(chalk.red(`Failed to unfreeze card: ${e instanceof Error ? e.message : String(e)}`));
-      exit(EXIT.ERROR);
+      exit(EXIT_CODES.ERROR);
     }
   });
 
@@ -623,13 +616,13 @@ program
       const card = getCard(resolved);
       if (!card) {
         console.error(chalk.red(`Card not found: ${cardId}`));
-        exit(EXIT.ERROR);
+        exit(EXIT_CODES.ERROR);
       }
 
       const provider = getProvider(card.provider_id);
       if (!provider) {
         console.error(chalk.red(`Provider not found for card`));
-        exit(EXIT.ERROR);
+        exit(EXIT_CODES.ERROR);
       }
 
       const providerConfig = { ...provider.config, ...(getProviderConfig(provider.name) || {}) };
@@ -645,7 +638,7 @@ program
         }
       } catch (e) {
         console.error(chalk.red(`Failed to get balance: ${e instanceof Error ? e.message : String(e)}`));
-        exit(EXIT.ERROR);
+        exit(EXIT_CODES.ERROR);
       }
     } else {
       const cards = listCards({ status: "active" });
@@ -849,7 +842,7 @@ agentCmd
     const agent = getAgent(id);
     if (!agent) {
       console.error(chalk.red(`Agent not found: ${id}`));
-      exit(EXIT.NOT_FOUND);
+      exit(EXIT_CODES.NOT_FOUND);
     }
     const globalOpts = program.opts();
     if (globalOpts["json"]) {
@@ -876,7 +869,7 @@ program
           const provider = getProviderByName(name);
           if (!provider) {
             console.error(chalk.red(`Provider not found: ${name}`));
-            exit(EXIT.ERROR);
+            exit(EXIT_CODES.ERROR);
           }
           deleteProvider(provider.id);
           removeProviderConfig(name);
@@ -889,18 +882,18 @@ program
           const db = getDatabase();
           const cardId = resolvePartialId(db, "cards", name) ?? name;
           const card = getCard(cardId);
-          if (!card) { console.error(chalk.red(`Card not found: ${name}`)); exit(EXIT.ERROR); }
+          if (!card) { console.error(chalk.red(`Card not found: ${name}`)); exit(EXIT_CODES.ERROR); }
           updateCard(cardId, { status: "closed" });
           console.log(chalk.green(`✓ Card ${cardId.slice(0, 8)} closed`));
           break;
         }
         default:
           console.error(chalk.red(`Unknown type: ${type}. Use: provider | card`));
-          exit(EXIT.ERROR);
+          exit(EXIT_CODES.ERROR);
       }
     } catch (e) {
       console.error(chalk.red(`Failed: ${e instanceof Error ? e.message : String(e)}`));
-      exit(EXIT.ERROR);
+      exit(EXIT_CODES.ERROR);
     }
   });
 
@@ -922,7 +915,7 @@ program
       console.log(chalk.green("✓") + " Feedback saved. Thank you!");
     } catch (e) {
       console.error(chalk.red(`Failed: ${e instanceof Error ? e.message : String(e)}`));
-      exit(EXIT.ERROR);
+      exit(EXIT_CODES.ERROR);
     }
   });
 
