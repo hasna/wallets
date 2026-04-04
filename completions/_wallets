@@ -8,10 +8,71 @@ _wallets() {
     'agent:Manage AI agents'
     'doctor:Run health diagnostics'
     'transaction:View transaction history'
+    'ping:Ping the wallet service'
+    'audit:View audit log'
+    'completions:Generate shell completions'
     'help:Show help'
+    'version:Show version'
   )
 
-  _describe 'command' commands
+  local -a provider_commands
+  provider_commands=(
+    'add:Register a wallet provider'
+    'list:List registered providers'
+    'remove:Remove a provider'
+  )
+
+  local -a card_commands
+  card_commands=(
+    'create:Create a new funded virtual card'
+    'create-batch:Create multiple cards at once'
+    'list:List all cards'
+    'details:Get full card details including PAN and CVV'
+    'close:Close a card permanently'
+    'close-batch:Close multiple cards at once'
+    'freeze:Freeze a card temporarily'
+    'unfreeze:Unfreeze a frozen card'
+    'rename:Rename a card'
+    'profile:Update card category/profile'
+  )
+
+  local -a agent_commands
+  agent_commands=(
+    'register:Register an AI agent'
+    'list:List all agents'
+  )
+
+  local -a transaction_commands
+  transaction_commands=(
+    'list:List card transactions'
+  )
+
+  local -a audit_commands
+  audit_commands=(
+    'list:View audit log entries'
+  )
+
+  if (( CURRENT == 2 )); then
+    _describe 'command' commands
+  elif (( CURRENT == 3 )); then
+    case "${words[2]}" in
+      provider)
+        _describe 'provider command' provider_commands
+        ;;
+      card)
+        _describe 'card command' card_commands
+        ;;
+      agent)
+        _describe 'agent command' agent_commands
+        ;;
+      transaction)
+        _describe 'transaction command' transaction_commands
+        ;;
+      audit)
+        _describe 'audit command' audit_commands
+        ;;
+    esac
+  fi
 }
 
 _wallets

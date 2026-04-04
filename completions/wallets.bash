@@ -1,5 +1,5 @@
 # wallets shell completion - bash
-# Source this file from your .bashrc: source /path/to/wallets/completions/wallets.bash
+# Source this file from your .bashrc: source /path/to/open-wallets/completions/wallets.bash
 
 _wallets_completions() {
   local cur prev words cword
@@ -7,22 +7,31 @@ _wallets_completions() {
 
   case "${words[1]}" in
     wallets)
-      COMPREPLY=($(compgen -W "provider card agent doctor transaction help version" -- "$cur"))
+      COMPREPLY=($(compgen -W "provider card agent doctor transaction ping audit completions help version" -- "$cur"))
       ;;
     provider)
-      COMPREPLY=($(compgen -W "add list remove help" -- "$cur"))
+      COMPREPLY=($(compgen -W "add list remove" -- "$cur"))
       ;;
     card)
-      COMPREPLY=($(compgen -W "create list details close freeze unfreeze stats profile help" -- "$cur"))
+      COMPREPLY=($(compgen -W "create create-batch list details close close-batch freeze unfreeze rename profile" -- "$cur"))
       ;;
     agent)
-      COMPREPLY=($(compgen -W "register list help" -- "$cur"))
+      COMPREPLY=($(compgen -W "register list" -- "$cur"))
       ;;
     doctor)
-      COMPREPLY=($(compgen -W "check help" -- "$cur"))
+      COMPREPLY=($(compgen -W "check" -- "$cur"))
       ;;
     transaction)
-      COMPREPLY=($(compgen -W "list help" -- "$cur"))
+      COMPREPLY=($(compgen -W "list" -- "$cur"))
+      ;;
+    ping)
+      COMPREPLY=()
+      ;;
+    audit)
+      COMPREPLY=($(compgen -W "list" -- "$cur"))
+      ;;
+    completions)
+      COMPREPLY=($(compgen -W "bash zsh fish" -- "$cur"))
       ;;
   esac
 }
