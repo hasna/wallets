@@ -1,0 +1,18 @@
+# lefthook configuration
+# https://github.com/evilmartians/lefthook
+
+pre-commit:
+  parallel: true
+  commands:
+    typecheck:
+      run: bun run typecheck
+    lint:
+      run: bun run lint
+    test:
+      run: bun test
+
+pre-push:
+  parallel: true
+  commands:
+    build:
+      run: bun run build

@@ -1,79 +1,80 @@
 {
-  "name": "@hasna/wallets",
-  "version": "0.1.7",
-  "description": "Universal wallet management for AI agents - CLI + MCP server with multi-provider support",
-  "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
-  "bin": {
-    "wallets": "dist/cli/index.js",
-    "wallets-mcp": "dist/mcp/index.js"
-  },
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    }
-  },
-  "files": [
-    "dist",
-    "LICENSE",
-    "README.md"
-  ],
-  "scripts": {
-    "build": "bun build src/cli/index.ts --outdir dist/cli --target bun --external chalk --external commander --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
-    "typecheck": "tsc --noEmit",
-    "test": "bun test",
-    "dev": "bun run dev:cli",
-    "dev:cli": "bun run src/cli/index.ts",
-    "dev:mcp": "bun run src/mcp/index.ts",
-    "lint": "biome check src/",
-    "lint:fix": "biome check --write .",
-    "postinstall": "mkdir -p $HOME/.hasna/wallets 2>/dev/null || true"
-  },
-  "keywords": [
-    "wallets",
-    "virtual-cards",
-    "mcp",
-    "ai",
-    "ai-agents",
-    "coding-agent",
-    "claude",
-    "codex",
-    "gemini",
-    "cli",
-    "agentcard",
-    "stripe-issuing",
-    "fintech"
-  ],
-  "publishConfig": {
-    "registry": "https://registry.npmjs.org",
-    "access": "public"
-  },
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/hasna/open-wallets.git"
-  },
-  "homepage": "https://github.com/hasna/open-wallets",
-  "bugs": {
-    "url": "https://github.com/hasna/open-wallets/issues"
-  },
-  "engines": {
-    "bun": ">=1.0.0"
-  },
-  "author": "Andrei Hasna <andrei@hasna.com>",
-  "license": "Apache-2.0",
-  "dependencies": {
-    "@hasna/cloud": "^0.1.1",
-    "@modelcontextprotocol/sdk": "^1.12.1",
-    "chalk": "^5.4.1",
-    "commander": "^13.1.0",
-    "jmespath": "^0.16.0",
-    "zod": "^3.24.2"
-  },
-  "devDependencies": {
-    "@biomejs/biome": "^1.9.4",
-    "@types/bun": "^1.2.4",
-    "typescript": "^5.7.3"
-  }
+	"name": "@hasna/wallets",
+	"version": "0.1.7",
+	"description": "Universal wallet management for AI agents - CLI + MCP server with multi-provider support",
+	"type": "module",
+	"main": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"bin": {
+		"wallets": "dist/cli/index.js",
+		"wallets-mcp": "dist/mcp/index.js"
+	},
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"files": ["dist", "LICENSE", "README.md"],
+	"scripts": {
+		"build": "bun build src/cli/index.ts --outdir dist/cli --target bun --external chalk --external commander --external @modelcontextprotocol/sdk && bun build src/mcp/index.ts --outdir dist/mcp --target bun --external @modelcontextprotocol/sdk && bun build src/index.ts --outdir dist --target bun && tsc --emitDeclarationOnly --outDir dist",
+		"typecheck": "tsc --noEmit",
+		"test": "bun test",
+		"test:coverage": "bun test --coverage",
+		"dev": "bun run dev:cli",
+		"dev:cli": "bun run src/cli/index.ts",
+		"dev:mcp": "bun run src/mcp/index.ts",
+		"dev:watch": "bun --watch run src/cli/index.ts",
+		"dev:mcp:watch": "bun --watch run src/mcp/index.ts",
+		"lint": "biome check src/",
+		"lint:fix": "biome check --write .",
+		"prepack": "bun run build",
+		"postinstall": "mkdir -p $HOME/.hasna/wallets 2>/dev/null || true && lefthook install"
+	},
+	"keywords": [
+		"wallets",
+		"virtual-cards",
+		"mcp",
+		"ai",
+		"ai-agents",
+		"coding-agent",
+		"claude",
+		"codex",
+		"gemini",
+		"cli",
+		"agentcard",
+		"stripe-issuing",
+		"fintech"
+	],
+	"publishConfig": {
+		"registry": "https://registry.npmjs.org",
+		"access": "public"
+	},
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/hasna/open-wallets.git"
+	},
+	"homepage": "https://github.com/hasna/open-wallets",
+	"bugs": {
+		"url": "https://github.com/hasna/open-wallets/issues"
+	},
+	"engines": {
+		"bun": ">=1.0.0"
+	},
+	"author": "Andrei Hasna <andrei@hasna.com>",
+	"license": "Apache-2.0",
+	"dependencies": {
+		"@hasna/cloud": "^0.1.1",
+		"@modelcontextprotocol/sdk": "^1.12.1",
+		"chalk": "^5.4.1",
+		"commander": "^13.1.0",
+		"jmespath": "^0.16.0",
+		"zod": "^3.24.2"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^1.9.4",
+		"@types/bun": "^1.2.4",
+		"lefthook": "^2.1.4",
+		"typescript": "^5.7.3"
+	}
 }
