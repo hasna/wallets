@@ -1,1385 +1,2014 @@
 #!/usr/bin/env bun
-import { Command } from "commander";
-import chalk from "chalk";
-import jmespath from "jmespath";
-import { existsSync, mkdirSync } from "fs";
-import { getDatabase, resolvePartialId, resolveCardId } from "../db/database.js";
-import { listProviders, getProvider, getProviderByName, deleteProvider, ensureProvider } from "../db/providers.js";
-import { createCardRecord, listCards, getCard, updateCard, getCardByIdempotencyKey } from "../db/cards.js";
-import { listTransactions, createTransaction } from "../db/transactions.js";
-import { registerAgent, listAgents, getAgent } from "../db/agents.js";
-import { listAuditLog, type AuditEntry } from "../db/audit.js";
-import { getProviderInstance } from "../providers/index.js";
-import { loadConfig, saveConfig, setProviderConfig, removeProviderConfig, getProviderConfig, getConfigDir, getConfigPath, type WalletsConfig } from "../lib/config.js";
-import { runDoctor } from "../lib/doctor.js";
-import { formatCard, formatProvider, formatTransaction } from "../lib/format.js";
-import type { Card } from "../types/index.js";
-import { EXIT_CODES } from "../types/index.js";
-import { homedir } from "os";
-import { readFileSync } from "fs";
-import { join } from "path";
-import { execSync } from "child_process";
+import { execSync } from 'node:child_process';
+import { existsSync, mkdirSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import chalk from 'chalk';
+import { Command } from 'commander';
+import jmespath from 'jmespath';
+import { getAgent, getAgentByName, listAgents, registerAgent } from '../db/agents.js';
+import { type AuditEntry, listAuditLog } from '../db/audit.js';
+import {
+	createCardRecord,
+	getCard,
+	getCardByIdempotencyKey,
+	listCards,
+	updateCard,
+	updateCardBalance,
+} from '../db/cards.js';
+import {
+	getDatabase,
+	resolveCardId,
+	resolvePartialId,
+} from '../db/database.js';
+import {
+	deleteProvider,
+	ensureProvider,
+	getProvider,
+	getProviderByName,
+	listProviders,
+} from '../db/providers.js';
+import { createTransaction, listTransactions } from '../db/transactions.js';
+import {
+	type WalletsConfig,
+	getConfigDir,
+	getConfigPath,
+	getProviderConfig,
+	loadConfig,
+	removeProviderConfig,
+	saveConfig,
+} from '../lib/config.js';
+import { cached } from '../lib/cache.js';
+import { runDoctor } from '../lib/doctor.js';
+import {
+	formatCard,
+	formatProvider,
+	formatTransaction,
+} from '../lib/format.js';
+import { getProviderInstance } from '../providers/index.js';
+import type { Card, WalletProvider } from '../types/index.js';
+import { EXIT_CODES } from '../types/index.js';
 
 function exit(code: number, msg?: string): never {
-  if (msg) console.error(msg);
-  process.exit(code);
+	if (msg) console.error(msg);
+	process.exit(code);
 }
 
 function getVersion(): string {
-  try {
-    const pkg = JSON.parse(readFileSync(join(import.meta.dir, "../../package.json"), "utf-8"));
-    return pkg.version || "0.1.0";
-  } catch {
-    return "0.1.0";
-  }
+	try {
+		const pkg = JSON.parse(
+			readFileSync(join(import.meta.dir, '../../package.json'), 'utf-8')
+		);
+		return pkg.version || '0.1.0';
+	} catch {
+		return '0.1.0';
+	}
 }
 
-function resolveId(partialId: string, table = "cards"): string {
-  const db = getDatabase();
-  let id: string | null = null;
-  if (table === "cards") {
-    id = resolveCardId(db, partialId);
-  } else {
-    id = resolvePartialId(db, table, partialId);
-  }
-  if (!id) {
-    // Check if ambiguous (multiple matches)
-    if (table === "cards") {
-      const byId = db.query("SELECT id FROM cards WHERE id LIKE ?").all(`${partialId}%`) as { id: string }[];
-      const byName = db.query("SELECT id, name FROM cards WHERE LOWER(name) LIKE LOWER(?)").all(`%${partialId}%`) as { id: string; name: string }[];
-      const byLast4 = partialId.length === 4 ? db.query("SELECT id FROM cards WHERE last_four = ?").all(partialId) as { id: string }[] : [];
-      const matches = [...byId, ...byName.filter(m => !byId.some(b => b.id === m.id)), ...byLast4.filter(m => !byId.some(b => b.id === m.id) && !byName.some(n => n.id === m.id))];
-      if (matches.length > 1) {
-        console.error(chalk.red(`Ambiguous ${table} ID "${partialId}" matches ${matches.length} cards:`));
-        matches.slice(0, 5).forEach(m => console.error(chalk.dim(`  - ${m.id.slice(0, 8)}`)));
-        exit(EXIT_CODES.NOT_FOUND);
-      }
-    }
-    console.error(chalk.red(`Could not resolve ${table} ID: ${partialId}`));
-    exit(EXIT_CODES.NOT_FOUND);
-  }
-  return id;
+function resolveId(partialId: string, table = 'cards'): string {
+	const db = getDatabase();
+	let id: string | null = null;
+	if (table === 'cards') {
+		id = resolveCardId(db, partialId);
+	} else {
+		id = resolvePartialId(db, table, partialId);
+	}
+	if (!id) {
+		// Check if ambiguous (multiple matches)
+		if (table === 'cards') {
+			const byId = db
+				.query('SELECT id FROM cards WHERE id LIKE ?')
+				.all(`${partialId}%`) as { id: string }[];
+			const byName = db
+				.query('SELECT id, name FROM cards WHERE LOWER(name) LIKE LOWER(?)')
+				.all(`%${partialId}%`) as { id: string; name: string }[];
+			const byLast4 =
+				partialId.length === 4
+					? (db
+							.query('SELECT id FROM cards WHERE last_four = ?')
+							.all(partialId) as { id: string }[])
+					: [];
+			const matches = [
+				...byId,
+				...byName.filter((m) => !byId.some((b) => b.id === m.id)),
+				...byLast4.filter(
+					(m) =>
+						!byId.some((b) => b.id === m.id) &&
+						!byName.some((n) => n.id === m.id)
+				),
+			];
+			if (matches.length > 1) {
+				console.error(
+					chalk.red(
+						`Ambiguous ${table} ID "${partialId}" matches ${matches.length} cards:`
+					)
+				);
+				matches
+					.slice(0, 5)
+					.forEach((m) => console.error(chalk.dim(`  - ${m.id.slice(0, 8)}`)));
+				exit(EXIT_CODES.NOT_FOUND);
+			}
+		}
+		console.error(chalk.red(`Could not resolve ${table} ID: ${partialId}`));
+		exit(EXIT_CODES.NOT_FOUND);
+	}
+	return id;
 }
 
 const statusColors: Record<string, (s: string) => string> = {
-  active: chalk.green,
-  pending: chalk.yellow,
-  frozen: chalk.blue,
-  closed: chalk.gray,
-  inactive: chalk.gray,
-  error: chalk.red,
+	active: chalk.green,
+	pending: chalk.yellow,
+	frozen: chalk.blue,
+	closed: chalk.gray,
+	inactive: chalk.gray,
+	error: chalk.red,
 };
 
 function colorStatus(status: string): string {
-  const fn = statusColors[status] || chalk.white;
-  return fn(status);
+	const fn = statusColors[status] || chalk.white;
+	return fn(status);
+}
+
+// ── Provider helpers ──────────────────────────────────────────────────────────
+
+function getCardProvider(card: Card): { provider: Card['provider_id'] extends string ? import('../types/index.js').Provider : never; instance: WalletProvider } {
+	const provider = getProvider(card.provider_id);
+	if (!provider) {
+		throw new Error(`Provider not found for card ${card.id}`);
+	}
+	const providerConfig = {
+		...provider.config,
+		...(getProviderConfig(provider.name) || {}),
+	};
+	const instance = getProviderInstance(provider.type, providerConfig);
+	return { provider, instance };
+}
+
+function resolveProvider(name: string): { provider: import('../types/index.js').Provider; instance: WalletProvider } {
+	const providerRecord = getProviderByName(name);
+	if (!providerRecord) {
+		throw new Error(`Provider not found: ${name}`);
+	}
+	const providerConfig = {
+		...providerRecord.config,
+		...(getProviderConfig(name) || {}),
+	};
+	const instance = getProviderInstance(providerRecord.type, providerConfig);
+	return { provider: providerRecord, instance };
 }
 
 const program = new Command();
 
 program
-  .name("wallets")
-  .description("Universal wallet management for AI agents - multi-provider virtual cards")
-  .version(getVersion())
-  .option("--json", "Output as JSON")
-  .option("--filter <jmespath>", "JMESPath filter to apply to JSON output (e.g. 'cards[?status==`active`]')")
-  .option("-q, --quiet", "Suppress all output except errors")
-  .option("-s, --silent", "Same as --quiet");
+	.name('wallets')
+	.description(
+		'Universal wallet management for AI agents - multi-provider virtual cards'
+	)
+	.version(getVersion())
+	.option('--json', 'Output as JSON')
+	.option(
+		'--filter <jmespath>',
+		"JMESPath filter to apply to JSON output (e.g. 'cards[?status==`active`]')"
+	)
+	.option('-q, --quiet', 'Suppress all output except errors')
+	.option('-s, --silent', 'Same as --quiet');
 
 // ── Output helpers ─────────────────────────────────────────────────────────
 
 function shouldOutput(): boolean {
-  const opts = program.opts();
-  return !opts.quiet && !opts.silent;
+	const opts = program.opts();
+	return !opts.quiet && !opts.silent;
 }
 
 function applyJsonFilter(data: unknown): unknown {
-  const opts = program.opts();
-  const filter = opts.filter as string | undefined;
-  if (!filter) return data;
-  try {
-    return jmespath.search(data, filter);
-  } catch (e) {
-    console.error(chalk.yellow(`Filter error: ${e instanceof Error ? e.message : String(e)}`));
-    return data;
-  }
+	const opts = program.opts();
+	const filter = opts.filter as string | undefined;
+	if (!filter) return data;
+	try {
+		return jmespath.search(data, filter);
+	} catch (e) {
+		console.error(
+			chalk.yellow(
+				`Filter error: ${e instanceof Error ? e.message : String(e)}`
+			)
+		);
+		return data;
+	}
 }
 
 function printJson(data: unknown): void {
-  console.log(JSON.stringify(applyJsonFilter(data), null, 2));
+	console.log(JSON.stringify(applyJsonFilter(data), null, 2));
 }
 
 // ── Provider commands ──────────────────────────────────────────────────────
 
-const providerCmd = program.command("provider").description("Manage wallet providers");
+const providerCmd = program
+	.command('provider')
+	.description('Manage wallet providers');
 
 providerCmd
-  .command("add <type>")
-  .description("Register a wallet provider (e.g., agentcard)")
-  .option("-n, --name <name>", "Provider display name")
-  .option("--jwt <token>", "JWT/API token for authentication")
-  .option("--api-key <key>", "API key for authentication")
-  .option("--base-url <url>", "Custom API base URL")
-  .option("--default", "Set as default provider")
-  .action((type: string, opts: { name?: string; jwt?: string; apiKey?: string; baseUrl?: string; default?: boolean }) => {
-    const name = opts.name || type;
-    const config: Record<string, unknown> = {};
+	.command('add <type>')
+	.description('Register a wallet provider (e.g., agentcard)')
+	.option('-n, --name <name>', 'Provider display name')
+	.option('--jwt <token>', 'JWT/API token for authentication')
+	.option('--api-key <key>', 'API key for authentication')
+	.option('--base-url <url>', 'Custom API base URL')
+	.option('--default', 'Set as default provider')
+	.action(
+		(
+			type: string,
+			opts: {
+				name?: string;
+				jwt?: string;
+				apiKey?: string;
+				baseUrl?: string;
+				default?: boolean;
+			}
+		) => {
+			const name = opts.name || type;
+			const config: Record<string, unknown> = {};
 
-    if (opts.jwt) config["jwt"] = opts.jwt;
-    if (opts.apiKey) config["api_key"] = opts.apiKey;
-    if (opts.baseUrl) config["baseUrl"] = opts.baseUrl;
+			if (opts.jwt) config.jwt = opts.jwt;
+			if (opts.apiKey) config.api_key = opts.apiKey;
+			if (opts.baseUrl) config.baseUrl = opts.baseUrl;
 
-    const provider = ensureProvider(name, type, config);
-    setProviderConfig(name, config);
+			const provider = ensureProvider(name, type, config);
 
-    if (opts.default) {
-      const cfg = loadConfig();
-      cfg.default_provider = name;
-      saveConfig(cfg);
-    }
+			if (opts.default) {
+				const cfg = loadConfig();
+				cfg.default_provider = name;
+				saveConfig(cfg);
+			}
 
-    const globalOpts = program.opts();
-    if (globalOpts["json"]) {
-      printJson(provider);
-    } else {
-      console.log(chalk.green(`Provider registered: ${formatProvider(provider)}`));
-      if (opts.default) console.log(chalk.dim(`  Set as default provider`));
-    }
-  });
-
-providerCmd
-  .command("list")
-  .description("List registered providers")
-  .action(() => {
-    const providers = listProviders();
-    const globalOpts = program.opts();
-
-    if (globalOpts["json"]) {
-      printJson(providers);
-      return;
-    }
-
-    if (providers.length === 0) {
-      console.log(chalk.yellow("No providers registered. Use 'wallets provider add <type>' to add one."));
-      return;
-    }
-
-    const config = loadConfig();
-    console.log(chalk.bold("Providers:"));
-    for (const p of providers) {
-      const isDefault = config.default_provider === p.name;
-      const defaultTag = isDefault ? chalk.cyan(" (default)") : "";
-      console.log(`  ${chalk.dim(p.id.slice(0, 8))} ${colorStatus(p.status).padEnd(18)} ${p.type.padEnd(12)} ${p.name}${defaultTag}`);
-    }
-  });
+			const globalOpts = program.opts();
+			if (globalOpts.json) {
+				printJson(provider);
+			} else {
+				console.log(
+					chalk.green(`Provider registered: ${formatProvider(provider)}`)
+				);
+				if (opts.default) console.log(chalk.dim('  Set as default provider'));
+			}
+		}
+	);
 
 providerCmd
-  .command("remove <name>")
-  .description("Remove a provider")
-  .option("-y, --yes", "Skip confirmation prompt")
-  .action(async (name: string, opts: { yes?: boolean }) => {
-    const provider = getProviderByName(name);
-    if (!provider) {
-      console.error(chalk.red(`Provider not found: ${name}`));
-      exit(EXIT_CODES.ERROR);
-    }
+	.command('list')
+	.description('List registered providers')
+	.action(() => {
+		const providers = listProviders();
+		const globalOpts = program.opts();
 
-    if (!opts.yes) {
-      const response = await new Promise<string>((resolve) => {
-        process.stdout.write(chalk.yellow(`Remove provider "${name}"? This cannot be undone. (y/N) `));
-        process.stdin.once("data", (d) => resolve(d.toString().trim().toLowerCase()));
-      });
-      if (response !== "y") {
-        console.log(chalk.dim("Aborted."));
-        return;
-      }
-    }
+		if (globalOpts.json) {
+			printJson(providers);
+			return;
+		}
 
-    deleteProvider(provider.id);
-    removeProviderConfig(name);
+		if (providers.length === 0) {
+			console.log(
+				chalk.yellow(
+					"No providers registered. Use 'wallets provider add <type>' to add one."
+				)
+			);
+			return;
+		}
 
-    const config = loadConfig();
-    if (config.default_provider === name) {
-      delete config.default_provider;
-      saveConfig(config);
-    }
+		const config = loadConfig();
+		console.log(chalk.bold('Providers:'));
+		for (const p of providers) {
+			const isDefault = config.default_provider === p.name;
+			const defaultTag = isDefault ? chalk.cyan(' (default)') : '';
+			console.log(
+				`  ${chalk.dim(p.id.slice(0, 8))} ${colorStatus(p.status).padEnd(18)} ${p.type.padEnd(12)} ${p.name}${defaultTag}`
+			);
+		}
+	});
 
-    console.log(chalk.green(`Provider removed: ${name}`));
-  });
+providerCmd
+	.command('remove <name>')
+	.description('Remove a provider')
+	.option('-y, --yes', 'Skip confirmation prompt')
+	.action(async (name: string, opts: { yes?: boolean }) => {
+		const provider = getProviderByName(name);
+		if (!provider) {
+			console.error(chalk.red(`Provider not found: ${name}`));
+			exit(EXIT_CODES.ERROR);
+		}
+
+		if (!opts.yes) {
+			const response = await new Promise<string>((resolve) => {
+				process.stdout.write(
+					chalk.yellow(
+						`Remove provider "${name}"? This cannot be undone. (y/N) `
+					)
+				);
+				process.stdin.once('data', (d) =>
+					resolve(d.toString().trim().toLowerCase())
+				);
+			});
+			if (response !== 'y') {
+				console.log(chalk.dim('Aborted.'));
+				return;
+			}
+		}
+
+		deleteProvider(provider.id);
+		removeProviderConfig(name);
+
+		const config = loadConfig();
+		if (config.default_provider === name) {
+			config.default_provider = undefined;
+			saveConfig(config);
+		}
+
+		console.log(chalk.green(`Provider removed: ${name}`));
+	});
 
 // ── Card commands ──────────────────────────────────────────────────────────
 
-const cardCmd = program.command("card").description("Manage virtual cards");
+const cardCmd = program.command('card').description('Manage virtual cards');
 
 cardCmd
-  .command("create")
-  .description("Create a new funded virtual card")
-  .requiredOption("-a, --amount <amount>", "Funding amount in dollars")
-  .option("-n, --name <name>", "Card display name")
-  .option("-p, --provider <name>", "Provider to use (default from config)")
-  .option("-c, --currency <code>", "Currency code (default: USD)")
-  .option("--agent <name>", "Assign card to an agent")
-  .option("--idempotency-key <key>", "Unique key to prevent duplicate cards on retry")
-  .option("--dry-run", "Preview the action without executing")
-  .action(async (opts: { amount: string; name?: string; provider?: string; currency?: string; agent?: string; idempotencyKey?: string; dryRun?: boolean }) => {
-    // Check for existing card with same idempotency key
-    if (opts.idempotencyKey) {
-      const existing = getCardByIdempotencyKey(opts.idempotencyKey);
-      if (existing) {
-        const globalOpts = program.opts();
-        if (globalOpts["json"]) {
-          printJson({ ...existing, _note: "existing card returned for idempotency key" });
-        } else {
-          console.log(chalk.yellow(`Card already exists for idempotency key: ${existing.id.slice(0, 8)} ${existing.name}`));
-        }
-        return;
-      }
-    }
+	.command('create')
+	.description('Create a new funded virtual card')
+	.requiredOption('-a, --amount <amount>', 'Funding amount in dollars')
+	.option('-n, --name <name>', 'Card display name')
+	.option('-p, --provider <name>', 'Provider to use (default from config)')
+	.option('-c, --currency <code>', 'Currency code (default: USD)')
+	.option('--agent <name>', 'Assign card to an agent')
+	.option(
+		'--idempotency-key <key>',
+		'Unique key to prevent duplicate cards on retry'
+	)
+	.option('--dry-run', 'Preview the action without executing')
+	.action(
+		async (opts: {
+			amount: string;
+			name?: string;
+			provider?: string;
+			currency?: string;
+			agent?: string;
+			idempotencyKey?: string;
+			dryRun?: boolean;
+		}) => {
+			// Check for existing card with same idempotency key
+			if (opts.idempotencyKey) {
+				const existing = getCardByIdempotencyKey(opts.idempotencyKey);
+				if (existing) {
+					const globalOpts = program.opts();
+					if (globalOpts.json) {
+						printJson({
+							...existing,
+							_note: 'existing card returned for idempotency key',
+						});
+					} else {
+						console.log(
+							chalk.yellow(
+								`Card already exists for idempotency key: ${existing.id.slice(0, 8)} ${existing.name}`
+							)
+						);
+					}
+					return;
+				}
+			}
 
-    const config = loadConfig();
-    const providerName = opts.provider || config.default_provider;
+			const config = loadConfig();
+			const providerName = opts.provider || config.default_provider;
 
-    if (!providerName) {
-      console.error(chalk.red("No provider specified and no default set. Use --provider or 'wallets provider add --default'."));
-      exit(EXIT_CODES.VALIDATION);
-    }
+			if (!providerName) {
+				console.error(
+					chalk.red(
+						"No provider specified and no default set. Use --provider or 'wallets provider add --default'."
+					)
+				);
+				exit(EXIT_CODES.VALIDATION);
+			}
 
-    const providerRecord = getProviderByName(providerName);
-    if (!providerRecord) {
-      console.error(chalk.red(`Provider not found: ${providerName}`));
-      exit(EXIT_CODES.NOT_FOUND);
-    }
+			if (opts.dryRun) {
+				console.log(
+					chalk.yellow(
+						`[dry-run] Would create card: amount=${opts.amount}, provider=${providerName}, name=${opts.name || 'unnamed'}`
+					)
+				);
+				return;
+			}
 
-    if (opts.dryRun) {
-      console.log(chalk.yellow(`[dry-run] Would create card: amount=${opts.amount}, provider=${providerName}, name=${opts.name || "unnamed"}`));
-      return;
-    }
+			const { provider: providerRecord, instance } = resolveProvider(providerName);
 
-    const providerConfig = { ...providerRecord.config, ...(getProviderConfig(providerName) || {}) };
-    const instance = getProviderInstance(providerRecord.type, providerConfig);
+			let agentId: string | null = null;
+			if (opts.agent) {
+				const agent = registerAgent({ name: opts.agent });
+				agentId = agent.id;
+			}
 
-    let agentId: string | null = null;
-    if (opts.agent) {
-      const agent = registerAgent({ name: opts.agent });
-      agentId = agent.id;
-    }
+			try {
+				const result = await instance.createCard({
+					amount: Number.parseFloat(opts.amount),
+					name: opts.name,
+					currency: (opts.currency as Card['currency']) || 'USD',
+					agent_id: agentId ?? undefined,
+				});
 
-    try {
-      const result = await instance.createCard({
-        amount: parseFloat(opts.amount),
-        name: opts.name,
-        currency: (opts.currency as Card["currency"]) || "USD",
-        agent_id: agentId ?? undefined,
-      });
+				const card = createCardRecord({
+					provider_id: providerRecord.id,
+					external_id: result.external_id || result.id,
+					name: result.name,
+					last_four: result.last_four,
+					brand: result.brand,
+					status: result.status,
+					currency: result.currency,
+					balance: result.balance,
+					funded_amount: result.funded_amount,
+					spending_limit: result.spending_limit,
+					agent_id: agentId,
+					metadata: result.funding_url
+						? { funding_url: result.funding_url }
+						: {},
+					idempotency_key: opts.idempotencyKey ?? null,
+				});
 
-      const card = createCardRecord({
-        provider_id: providerRecord.id,
-        external_id: result.external_id || result.id,
-        name: result.name,
-        last_four: result.last_four,
-        brand: result.brand,
-        status: result.status,
-        currency: result.currency,
-        balance: result.balance,
-        funded_amount: result.funded_amount,
-        spending_limit: result.spending_limit,
-        agent_id: agentId,
-        metadata: result.funding_url ? { funding_url: result.funding_url } : {},
-        idempotency_key: opts.idempotencyKey ?? null,
-      });
-
-      const globalOpts = program.opts();
-      if (globalOpts["json"]) {
-        printJson({ ...card, funding_url: result.funding_url });
-      } else if (shouldOutput()) {
-        console.log(chalk.green(`Card created: ${formatCard(card)}`));
-        if (result.funding_url) {
-          console.log(chalk.cyan(`  Fund at: ${result.funding_url}`));
-        }
-      }
-    } catch (e) {
-      console.error(chalk.red(`Failed to create card: ${e instanceof Error ? e.message : String(e)}`));
-      exit(EXIT_CODES.ERROR);
-    }
-  });
-
-cardCmd
-  .command("create-batch")
-  .description("Create multiple cards at once")
-  .requiredOption("-a, --amounts <amounts>", "Comma-separated funding amounts (e.g., 10,20,50)")
-  .option("-n, --names <names>", "Comma-separated card names (optional)")
-  .option("-p, --provider <name>", "Provider to use (default from config)")
-  .option("-c, --currency <code>", "Currency code (default: USD)")
-  .option("--agent <name>", "Assign cards to an agent")
-  .option("--idempotency-key <key>", "Unique key prefix for preventing duplicates")
-  .option("--dry-run", "Preview the action without executing")
-  .action(async (opts: { amounts: string; names?: string; provider?: string; currency?: string; agent?: string; idempotencyKey?: string; dryRun?: boolean }) => {
-    const config = loadConfig();
-    const providerName = opts.provider || config.default_provider;
-
-    if (!providerName) {
-      console.error(chalk.red("No provider specified and no default set. Use --provider or 'wallets provider add --default'."));
-      exit(EXIT_CODES.VALIDATION);
-    }
-
-    const providerRecord = getProviderByName(providerName);
-    if (!providerRecord) {
-      console.error(chalk.red(`Provider not found: ${providerName}`));
-      exit(EXIT_CODES.NOT_FOUND);
-    }
-
-    const amounts = opts.amounts.split(",").map((a) => parseFloat(a.trim()));
-    const names = opts.names ? opts.names.split(",").map((n) => n.trim()) : [];
-    const currency = (opts.currency as Card["currency"]) || "USD";
-
-    if (amounts.some(isNaN)) {
-      console.error(chalk.red("Invalid amounts. Use comma-separated numbers (e.g., 10,20,50)"));
-      exit(EXIT_CODES.VALIDATION);
-    }
-
-    if (opts.dryRun) {
-      console.log(chalk.yellow(`[dry-run] Would create ${amounts.length} cards:`));
-      amounts.forEach((amt, i) => {
-        console.log(chalk.yellow(`  - amount=${amt}, name=${names[i] || "unnamed"}, provider=${providerName}`));
-      });
-      return;
-    }
-
-    const providerConfig = { ...providerRecord.config, ...(getProviderConfig(providerName) || {}) };
-    const instance = getProviderInstance(providerRecord.type, providerConfig);
-
-    let agentId: string | null = null;
-    if (opts.agent) {
-      const agent = registerAgent({ name: opts.agent });
-      agentId = agent.id;
-    }
-
-    const results: Card[] = [];
-    const errors: string[] = [];
-
-    for (let i = 0; i < amounts.length; i++) {
-      const amount = amounts[i]!;
-      const name = names[i] || `Batch Card ${i + 1}`;
-      const idempotencyKey = opts.idempotencyKey ? `${opts.idempotencyKey}-${i}` : undefined;
-
-      process.stdout.write(chalk.dim(`[${i + 1}/${amounts.length}] Creating ${name}... `));
-
-      try {
-        // Check idempotency
-        if (idempotencyKey) {
-          const existing = getCardByIdempotencyKey(idempotencyKey);
-          if (existing) {
-            results.push(existing);
-            continue;
-          }
-        }
-
-        const result = await instance.createCard({
-          amount,
-          name,
-          currency,
-          agent_id: agentId ?? undefined,
-        });
-
-        const card = createCardRecord({
-          provider_id: providerRecord.id,
-          external_id: result.external_id || result.id,
-          name: result.name,
-          last_four: result.last_four,
-          brand: result.brand,
-          status: result.status,
-          currency: result.currency,
-          balance: result.balance,
-          funded_amount: result.funded_amount,
-          spending_limit: result.spending_limit,
-          agent_id: agentId,
-          metadata: result.funding_url ? { funding_url: result.funding_url } : {},
-          idempotency_key: idempotencyKey ?? null,
-        });
-        results.push(card);
-        process.stdout.write(chalk.green("✓\n"));
-      } catch (e) {
-        errors.push(`${name}: ${e instanceof Error ? e.message : String(e)}`);
-        process.stdout.write(chalk.red("✗\n"));
-      }
-    }
-
-    const globalOpts = program.opts();
-    if (globalOpts["json"]) {
-      printJson({ cards: results, errors: errors.length > 0 ? errors : undefined });
-    } else {
-      if (shouldOutput()) {
-        console.log(chalk.green(`Created ${results.length}/${amounts.length} cards:`));
-        for (const card of results) {
-          console.log(`  ${formatCard(card)}`);
-        }
-        if (errors.length > 0) {
-          console.log(chalk.red(`\nFailed ${errors.length}:`));
-          for (const err of errors) {
-            console.log(chalk.red(`  ${err}`));
-          }
-        }
-      }
-    }
-  });
+				const globalOpts = program.opts();
+				if (globalOpts.json) {
+					printJson({ ...card, funding_url: result.funding_url });
+				} else if (shouldOutput()) {
+					console.log(chalk.green(`Card created: ${formatCard(card)}`));
+					if (result.funding_url) {
+						console.log(chalk.cyan(`  Fund at: ${result.funding_url}`));
+					}
+				}
+			} catch (e) {
+				console.error(
+					chalk.red(
+						`Failed to create card: ${e instanceof Error ? e.message : String(e)}`
+					)
+				);
+				exit(EXIT_CODES.ERROR);
+			}
+		}
+	);
 
 cardCmd
-  .command("list")
-  .description("List all cards")
-  .option("-s, --status <status>", "Filter by status")
-  .option("-p, --provider <name>", "Filter by provider")
-  .option("--agent <name>", "Filter by agent")
-  .option("-c, --category <cat>", "Filter by category/profile")
-  .option("-f, --format <type>", "Output format: table, json, csv", "table")
-  .action((opts: { status?: string; provider?: string; agent?: string; category?: string; format?: string }) => {
-    let providerId: string | undefined;
-    if (opts.provider) {
-      const p = getProviderByName(opts.provider);
-      if (p) providerId = p.id;
-    }
+	.command('create-batch')
+	.description('Create multiple cards at once')
+	.requiredOption(
+		'-a, --amounts <amounts>',
+		'Comma-separated funding amounts (e.g., 10,20,50)'
+	)
+	.option('-n, --names <names>', 'Comma-separated card names (optional)')
+	.option('-p, --provider <name>', 'Provider to use (default from config)')
+	.option('-c, --currency <code>', 'Currency code (default: USD)')
+	.option('--agent <name>', 'Assign cards to an agent')
+	.option(
+		'--idempotency-key <key>',
+		'Unique key prefix for preventing duplicates'
+	)
+	.option('--dry-run', 'Preview the action without executing')
+	.option('-j, --concurrency <n>', 'Number of concurrent creations', '5')
+	.action(
+		async (opts: {
+			amounts: string;
+			names?: string;
+			provider?: string;
+			currency?: string;
+			agent?: string;
+			idempotencyKey?: string;
+			dryRun?: boolean;
+			concurrency: string;
+		}) => {
+			const config = loadConfig();
+			const providerName = opts.provider || config.default_provider;
 
-    const allCards = listCards({
-      status: opts.status as Card["status"],
-      provider_id: providerId,
-    });
+			if (!providerName) {
+				console.error(
+					chalk.red(
+						"No provider specified and no default set. Use --provider or 'wallets provider add --default'."
+					)
+				);
+				exit(EXIT_CODES.VALIDATION);
+			}
 
-    // Filter by category if specified
-    const cards = opts.category
-      ? allCards.filter((c) => c.metadata?.category === opts.category)
-      : allCards;
+			const { provider: providerRecord, instance } = resolveProvider(providerName);
 
-    const globalOpts = program.opts();
-    const format = opts.format || (globalOpts["json"] ? "json" : "table");
+			const amounts = opts.amounts
+				.split(',')
+				.map((a) => Number.parseFloat(a.trim()));
+			const names = opts.names
+				? opts.names.split(',').map((n) => n.trim())
+				: [];
+			const currency = (opts.currency as Card['currency']) || 'USD';
 
-    if (format === "json") {
-      printJson(cards);
-      return;
-    }
+			if (amounts.some(Number.isNaN)) {
+				console.error(
+					chalk.red(
+						'Invalid amounts. Use comma-separated numbers (e.g., 10,20,50)'
+					)
+				);
+				exit(EXIT_CODES.VALIDATION);
+			}
 
-    if (format === "csv") {
-      console.log("id,status,last_four,balance,currency,name,category,provider_id,created_at");
-      for (const card of cards) {
-        console.log(`${card.id},${card.status},${card.last_four || ""},${card.balance},${card.currency},"${card.name}","${card.metadata?.category || ""}",${card.provider_id},${card.created_at}`);
-      }
-      return;
-    }
+			if (opts.dryRun) {
+				console.log(
+					chalk.yellow(`[dry-run] Would create ${amounts.length} cards:`)
+				);
+				amounts.forEach((amt, i) => {
+					console.log(
+						chalk.yellow(
+							`  - amount=${amt}, name=${names[i] || 'unnamed'}, provider=${providerName}`
+						)
+					);
+				});
+				return;
+			}
 
-    if (cards.length === 0) {
-      if (shouldOutput()) console.log(chalk.yellow("No cards found. Use 'wallets card create' to create one."));
-      return;
-    }
+			let agentId: string | null = null;
+			if (opts.agent) {
+				const agent = registerAgent({ name: opts.agent });
+				agentId = agent.id;
+			}
 
-    if (shouldOutput()) {
-      console.log(chalk.bold("Cards:"));
-      for (const card of cards) {
-        console.log(`  ${formatCard(card)}`);
-      }
-    }
-  });
+			const concurrency = Math.min(Math.max(1, Number.parseInt(opts.concurrency, 10) || 5), 20);
+			const results: Card[] = [];
+			const errors: string[] = [];
 
-cardCmd
-  .command("details <id>")
-  .description("Get full card details including PAN and CVV")
-  .action(async (id: string) => {
-    const cardId = resolveId(id, "cards");
-    const card = getCard(cardId);
-    if (!card) {
-      console.error(chalk.red(`Card not found: ${id}`));
-      exit(EXIT_CODES.ERROR);
-    }
+			// Build work items
+			const items = amounts.map((amount, i) => ({
+				index: i,
+				amount,
+				name: names[i] || `Batch Card ${i + 1}`,
+				idempotencyKey: opts.idempotencyKey
+					? `${opts.idempotencyKey}-${i}`
+					: undefined,
+			}));
 
-    const provider = getProvider(card.provider_id);
-    if (!provider) {
-      console.error(chalk.red(`Provider not found for card`));
-      exit(EXIT_CODES.ERROR);
-    }
+			// Process with concurrency limit
+			for (let start = 0; start < items.length; start += concurrency) {
+				const chunk = items.slice(start, start + concurrency);
+				const chunkResults = await Promise.all(
+					chunk.map(async (item) => {
+						const { index, amount, name, idempotencyKey } = item;
+						process.stdout.write(
+							chalk.dim(`[${index + 1}/${amounts.length}] Creating ${name}... `)
+						);
 
-    const providerConfig = { ...provider.config, ...(getProviderConfig(provider.name) || {}) };
-    const instance = getProviderInstance(provider.type, providerConfig);
+						try {
+							// Check idempotency
+							if (idempotencyKey) {
+								const existing = getCardByIdempotencyKey(idempotencyKey);
+								if (existing) {
+									process.stdout.write(chalk.yellow('○ (existing)\n'));
+									return { card: existing, error: null };
+								}
+							}
 
-    try {
-      const details = await instance.getCardDetails(card.external_id);
-      const globalOpts = program.opts();
+							const result = await instance.createCard({
+								amount,
+								name,
+								currency,
+								agent_id: agentId ?? undefined,
+							});
 
-      if (globalOpts["json"]) {
-        printJson(details);
-      } else {
-        console.log(chalk.bold("Card Details:"));
-        console.log(`  ID:      ${card.id}`);
-        console.log(`  Name:    ${card.name}`);
-        console.log(`  PAN:     ${details.pan}`);
-        console.log(`  CVV:     ${details.cvv}`);
-        console.log(`  Exp:     ${details.exp_month}/${details.exp_year}`);
-        console.log(`  Status:  ${colorStatus(card.status)}`);
-        console.log(`  Balance: $${details.balance.toFixed(2)}`);
-      }
-    } catch (e) {
-      console.error(chalk.red(`Failed to get details: ${e instanceof Error ? e.message : String(e)}`));
-      exit(EXIT_CODES.ERROR);
-    }
-  });
+							const card = createCardRecord({
+								provider_id: providerRecord.id,
+								external_id: result.external_id || result.id,
+								name: result.name,
+								last_four: result.last_four,
+								brand: result.brand,
+								status: result.status,
+								currency: result.currency,
+								balance: result.balance,
+								funded_amount: result.funded_amount,
+								spending_limit: result.spending_limit,
+								agent_id: agentId,
+								metadata: result.funding_url
+									? { funding_url: result.funding_url }
+									: {},
+								idempotency_key: idempotencyKey ?? null,
+							});
+							process.stdout.write(chalk.green('✓\n'));
+							return { card, error: null };
+						} catch (e) {
+							process.stdout.write(chalk.red('✗\n'));
+							return {
+								card: null,
+								error: `${name}: ${e instanceof Error ? e.message : String(e)}`,
+							};
+						}
+					})
+				);
 
-cardCmd
-  .command("close <id>")
-  .description("Close a card permanently")
-  .option("--dry-run", "Preview the action without executing")
-  .option("-y, --yes", "Skip confirmation prompt")
-  .action(async (id: string, opts: { dryRun?: boolean; yes?: boolean }) => {
-    const cardId = resolveId(id, "cards");
-    const card = getCard(cardId);
-    if (!card) {
-      console.error(chalk.red(`Card not found: ${id}`));
-      exit(EXIT_CODES.NOT_FOUND);
-    }
+				for (const r of chunkResults) {
+					if (r.card) results.push(r.card);
+					if (r.error) errors.push(r.error);
+				}
+			}
 
-    const provider = getProvider(card.provider_id);
-    if (!provider) {
-      console.error(chalk.red(`Provider not found for card`));
-      exit(EXIT_CODES.ERROR);
-    }
-
-    if (opts.dryRun) {
-      console.log(chalk.yellow(`[dry-run] Would close card: ${card.id.slice(0, 8)} ${card.name}`));
-      return;
-    }
-
-    if (!opts.yes) {
-      const response = await new Promise<string>((resolve) => {
-        process.stdout.write(chalk.yellow(`Close card "${card.name}" (${card.id.slice(0, 8)})? This cannot be undone. (y/N) `));
-        process.stdin.once("data", (d) => resolve(d.toString().trim().toLowerCase()));
-      });
-      if (response !== "y") {
-        console.log(chalk.dim("Aborted."));
-        return;
-      }
-    }
-
-    const providerConfig = { ...provider.config, ...(getProviderConfig(provider.name) || {}) };
-    const instance = getProviderInstance(provider.type, providerConfig);
-
-    try {
-      await instance.closeCard(card.external_id);
-      updateCard(cardId, { status: "closed" });
-      console.log(chalk.green(`Card closed: ${card.id.slice(0, 8)} ${card.name}`));
-    } catch (e) {
-      console.error(chalk.red(`Failed to close card: ${e instanceof Error ? e.message : String(e)}`));
-      exit(EXIT_CODES.ERROR);
-    }
-  });
-
-cardCmd
-  .command("close-batch")
-  .description("Close multiple cards at once")
-  .requiredOption("-i, --ids <ids>", "Comma-separated card IDs or partial IDs")
-  .option("-y, --yes", "Skip confirmation prompt")
-  .option("--dry-run", "Preview the action without executing")
-  .action(async (opts: { ids: string; yes?: boolean; dryRun?: boolean }) => {
-    const cardIds = opts.ids.split(",").map((id) => id.trim());
-    const cards: Card[] = [];
-
-    for (const partialId of cardIds) {
-      const cardId = resolveId(partialId, "cards");
-      const card = getCard(cardId);
-      if (!card) {
-        console.error(chalk.red(`Card not found: ${partialId}`));
-        exit(EXIT_CODES.NOT_FOUND);
-      }
-      if (card.status === "closed") {
-        console.error(chalk.yellow(`Card already closed: ${card.id.slice(0, 8)} ${card.name}`));
-        continue;
-      }
-      cards.push(card);
-    }
-
-    if (cards.length === 0) {
-      console.log(chalk.yellow("No cards to close."));
-      return;
-    }
-
-    if (opts.dryRun) {
-      console.log(chalk.yellow(`[dry-run] Would close ${cards.length} cards:`));
-      for (const card of cards) {
-        console.log(chalk.yellow(`  - ${card.id.slice(0, 8)} ${card.name}`));
-      }
-      return;
-    }
-
-    if (!opts.yes) {
-      console.log(chalk.bold(`About to close ${cards.length} cards:`));
-      for (const card of cards) {
-        console.log(`  - ${card.id.slice(0, 8)} ${card.name} (${card.status})`);
-      }
-      const response = await new Promise<string>((resolve) => {
-        process.stdout.write(chalk.yellow(`\nClose ${cards.length} cards? This cannot be undone. (y/N) `));
-        process.stdin.once("data", (d) => resolve(d.toString().trim().toLowerCase()));
-      });
-      if (response !== "y") {
-        console.log(chalk.dim("Aborted."));
-        return;
-      }
-    }
-
-    const results: { card: Card; success: boolean; error?: string }[] = [];
-
-    for (const card of cards) {
-      const provider = getProvider(card.provider_id);
-      if (!provider) {
-        results.push({ card, success: false, error: "Provider not found" });
-        continue;
-      }
-
-      const providerConfig = { ...provider.config, ...(getProviderConfig(provider.name) || {}) };
-      const instance = getProviderInstance(provider.type, providerConfig);
-
-      try {
-        await instance.closeCard(card.external_id);
-        updateCard(card.id, { status: "closed" });
-        results.push({ card, success: true });
-      } catch (e) {
-        results.push({ card, success: false, error: e instanceof Error ? e.message : String(e) });
-      }
-    }
-
-    const successCount = results.filter((r) => r.success).length;
-    const errorCount = results.filter((r) => !r.success).length;
-
-    console.log(chalk.green(`Closed ${successCount}/${cards.length} cards.`));
-    if (errorCount > 0) {
-      console.log(chalk.red(`Failed ${errorCount}:`));
-      for (const r of results.filter((r) => !r.success)) {
-        console.log(chalk.red(`  - ${r.card.id.slice(0, 8)} ${r.card.name}: ${r.error}`));
-      }
-    }
-  });
+			const globalOpts = program.opts();
+			if (globalOpts.json) {
+				printJson({
+					cards: results,
+					errors: errors.length > 0 ? errors : undefined,
+				});
+			} else {
+				if (shouldOutput()) {
+					console.log(
+						chalk.green(`Created ${results.length}/${amounts.length} cards:`)
+					);
+					for (const card of results) {
+						console.log(`  ${formatCard(card)}`);
+					}
+					if (errors.length > 0) {
+						console.log(chalk.red(`\nFailed ${errors.length}:`));
+						for (const err of errors) {
+							console.log(chalk.red(`  ${err}`));
+						}
+					}
+				}
+			}
+		}
+	);
 
 cardCmd
-  .command("freeze <id>")
-  .description("Freeze a card temporarily")
-  .option("--dry-run", "Preview the action without executing")
-  .action(async (id: string, opts: { dryRun?: boolean }) => {
-    const cardId = resolveId(id, "cards");
-    const card = getCard(cardId);
-    if (!card) {
-      console.error(chalk.red(`Card not found: ${id}`));
-      exit(EXIT_CODES.NOT_FOUND);
-    }
+	.command('list')
+	.description('List all cards')
+	.option('-s, --status <status>', 'Filter by status')
+	.option('-p, --provider <name>', 'Filter by provider')
+	.option('--agent <name>', 'Filter by agent')
+	.option('-c, --category <cat>', 'Filter by category/profile')
+	.option('-f, --format <type>', 'Output format: table, json, csv', 'table')
+	.option('--sort <field>', 'Sort by field: created_at, updated_at, name, balance, status', 'created_at')
+	.action(
+		(opts: {
+			status?: string;
+			provider?: string;
+			agent?: string;
+			category?: string;
+			format?: string;
+			sort?: string;
+		}) => {
+			let providerId: string | undefined;
+			if (opts.provider) {
+				const p = getProviderByName(opts.provider);
+				if (p) providerId = p.id;
+			}
 
-    if (card.status !== "active") {
-      console.error(chalk.red(`Card is not active: ${card.status}`));
-      exit(EXIT_CODES.VALIDATION);
-    }
+			let agentId: string | undefined;
+			if (opts.agent) {
+				const agent = getAgentByName(opts.agent);
+				if (agent) agentId = agent.id;
+			}
 
-    if (opts.dryRun) {
-      console.log(chalk.yellow(`[dry-run] Would freeze card: ${card.id.slice(0, 8)} ${card.name}`));
-      return;
-    }
+			const allCards = listCards({
+				status: opts.status as Card['status'],
+				provider_id: providerId,
+				agent_id: agentId,
+			});
 
-    const provider = getProvider(card.provider_id);
-    if (!provider) {
-      console.error(chalk.red(`Provider not found for card`));
-      exit(EXIT_CODES.ERROR);
-    }
+			// Filter by category if specified
+			const cards = (opts.category
+				? allCards.filter((c) => c.metadata?.category === opts.category)
+				: allCards
+			).sort((a, b) => {
+				switch (opts.sort) {
+					case 'name':
+						return a.name.localeCompare(b.name);
+					case 'balance':
+						return a.balance - b.balance;
+					case 'status':
+						return a.status.localeCompare(b.status);
+					case 'updated_at':
+						return (b.updated_at ?? b.created_at).localeCompare(a.updated_at ?? a.created_at);
+					case 'created_at':
+					default:
+						return b.created_at.localeCompare(a.created_at);
+				}
+			});
 
-    const providerConfig = { ...provider.config, ...(getProviderConfig(provider.name) || {}) };
-    const instance = getProviderInstance(provider.type, providerConfig);
+			const globalOpts = program.opts();
+			const format = opts.format || (globalOpts.json ? 'json' : 'table');
 
-    try {
-      if (instance.freezeCard) {
-        await instance.freezeCard(card.external_id);
-      }
-      updateCard(cardId, { status: "frozen" });
-      console.log(chalk.green(`Card frozen: ${card.id.slice(0, 8)} ${card.name}`));
-    } catch (e) {
-      console.error(chalk.red(`Failed to freeze card: ${e instanceof Error ? e.message : String(e)}`));
-      exit(EXIT_CODES.ERROR);
-    }
-  });
+			if (format === 'json') {
+				printJson(cards);
+				return;
+			}
+
+			if (format === 'csv') {
+				console.log(
+					'id,status,last_four,balance,currency,name,category,provider_id,created_at'
+				);
+				for (const card of cards) {
+					console.log(
+						`${card.id},${card.status},${card.last_four || ''},${card.balance},${card.currency},"${card.name}","${card.metadata?.category || ''}",${card.provider_id},${card.created_at}`
+					);
+				}
+				return;
+			}
+
+			if (cards.length === 0) {
+				if (shouldOutput())
+					console.log(
+						chalk.yellow(
+							"No cards found. Use 'wallets card create' to create one."
+						)
+					);
+				return;
+			}
+
+			if (shouldOutput()) {
+				console.log(chalk.bold('Cards:'));
+				for (const card of cards) {
+					console.log(`  ${formatCard(card)}`);
+				}
+			}
+		}
+	);
 
 cardCmd
-  .command("unfreeze <id>")
-  .description("Unfreeze a frozen card")
-  .option("--dry-run", "Preview the action without executing")
-  .action(async (id: string, opts: { dryRun?: boolean }) => {
-    const cardId = resolveId(id, "cards");
-    const card = getCard(cardId);
-    if (!card) {
-      console.error(chalk.red(`Card not found: ${id}`));
-      exit(EXIT_CODES.NOT_FOUND);
-    }
+	.command('details <id>')
+	.description('Get full card details including PAN and CVV')
+	.action(async (id: string) => {
+		const cardId = resolveId(id, 'cards');
+		const card = getCard(cardId);
+		if (!card) {
+			console.error(chalk.red(`Card not found: ${id}`));
+			exit(EXIT_CODES.ERROR);
+		}
 
-    if (card.status !== "frozen") {
-      console.error(chalk.red(`Card is not frozen: ${card.status}`));
-      exit(EXIT_CODES.VALIDATION);
-    }
+		try {
+			const { instance } = getCardProvider(card);
+			const details = await instance.getCardDetails(card.external_id);
 
-    if (opts.dryRun) {
-      console.log(chalk.yellow(`[dry-run] Would unfreeze card: ${card.id.slice(0, 8)} ${card.name}`));
-      return;
-    }
+			// Persist balance and status back to local DB
+			updateCardBalance(cardId, details.balance);
+			if (details.status !== card.status) {
+				updateCard(cardId, { status: details.status });
+			}
 
-    const provider = getProvider(card.provider_id);
-    if (!provider) {
-      console.error(chalk.red(`Provider not found for card`));
-      exit(EXIT_CODES.ERROR);
-    }
+			const globalOpts = program.opts();
 
-    const providerConfig = { ...provider.config, ...(getProviderConfig(provider.name) || {}) };
-    const instance = getProviderInstance(provider.type, providerConfig);
+			if (globalOpts.json) {
+				printJson(details);
+			} else {
+				console.log(chalk.bold('Card Details:'));
+				console.log(`  ID:      ${card.id}`);
+				console.log(`  Name:    ${card.name}`);
+				console.log(`  PAN:     ${details.pan}`);
+				console.log(`  CVV:     ${details.cvv}`);
+				console.log(`  Exp:     ${details.exp_month}/${details.exp_year}`);
+				console.log(`  Status:  ${colorStatus(card.status)}`);
+				console.log(`  Balance: $${details.balance.toFixed(2)}`);
+			}
+		} catch (e) {
+			console.error(
+				chalk.red(
+					`Failed to get details: ${e instanceof Error ? e.message : String(e)}`
+				)
+			);
+			exit(EXIT_CODES.ERROR);
+		}
+	});
 
-    try {
-      if (instance.unfreezeCard) {
-        await instance.unfreezeCard(card.external_id);
-      }
-      updateCard(cardId, { status: "active" });
-      console.log(chalk.green(`Card unfrozen: ${card.id.slice(0, 8)} ${card.name}`));
-    } catch (e) {
-      console.error(chalk.red(`Failed to unfreeze card: ${e instanceof Error ? e.message : String(e)}`));
-      exit(EXIT_CODES.ERROR);
-    }
-  });
+cardCmd
+	.command('close <id>')
+	.description('Close a card permanently')
+	.option('--dry-run', 'Preview the action without executing')
+	.option('-y, --yes', 'Skip confirmation prompt')
+	.action(async (id: string, opts: { dryRun?: boolean; yes?: boolean }) => {
+		const cardId = resolveId(id, 'cards');
+		const card = getCard(cardId);
+		if (!card) {
+			console.error(chalk.red(`Card not found: ${id}`));
+			exit(EXIT_CODES.NOT_FOUND);
+		}
+
+		if (opts.dryRun) {
+			console.log(
+				chalk.yellow(
+					`[dry-run] Would close card: ${card.id.slice(0, 8)} ${card.name}`
+				)
+			);
+			return;
+		}
+
+		if (!opts.yes) {
+			const response = await new Promise<string>((resolve) => {
+				process.stdout.write(
+					chalk.yellow(
+						`Close card "${card.name}" (${card.id.slice(0, 8)})? This cannot be undone. (y/N) `
+					)
+				);
+				process.stdin.once('data', (d) =>
+					resolve(d.toString().trim().toLowerCase())
+				);
+			});
+			if (response !== 'y') {
+				console.log(chalk.dim('Aborted.'));
+				return;
+			}
+		}
+
+		try {
+			const { instance } = getCardProvider(card);
+			await instance.closeCard(card.external_id);
+			updateCard(cardId, { status: 'closed' });
+			console.log(
+				chalk.green(`Card closed: ${card.id.slice(0, 8)} ${card.name}`)
+			);
+		} catch (e) {
+			console.error(
+				chalk.red(
+					`Failed to close card: ${e instanceof Error ? e.message : String(e)}`
+				)
+			);
+			exit(EXIT_CODES.ERROR);
+		}
+	});
+
+cardCmd
+	.command('close-batch')
+	.description('Close multiple cards at once')
+	.requiredOption('-i, --ids <ids>', 'Comma-separated card IDs or partial IDs')
+	.option('-y, --yes', 'Skip confirmation prompt')
+	.option('--dry-run', 'Preview the action without executing')
+	.action(async (opts: { ids: string; yes?: boolean; dryRun?: boolean }) => {
+		const cardIds = opts.ids.split(',').map((id) => id.trim());
+		const cards: Card[] = [];
+
+		for (const partialId of cardIds) {
+			const cardId = resolveId(partialId, 'cards');
+			const card = getCard(cardId);
+			if (!card) {
+				console.error(chalk.red(`Card not found: ${partialId}`));
+				exit(EXIT_CODES.NOT_FOUND);
+			}
+			if (card.status === 'closed') {
+				console.error(
+					chalk.yellow(
+						`Card already closed: ${card.id.slice(0, 8)} ${card.name}`
+					)
+				);
+				continue;
+			}
+			cards.push(card);
+		}
+
+		if (cards.length === 0) {
+			console.log(chalk.yellow('No cards to close.'));
+			return;
+		}
+
+		if (opts.dryRun) {
+			console.log(chalk.yellow(`[dry-run] Would close ${cards.length} cards:`));
+			for (const card of cards) {
+				console.log(chalk.yellow(`  - ${card.id.slice(0, 8)} ${card.name}`));
+			}
+			return;
+		}
+
+		if (!opts.yes) {
+			console.log(chalk.bold(`About to close ${cards.length} cards:`));
+			for (const card of cards) {
+				console.log(`  - ${card.id.slice(0, 8)} ${card.name} (${card.status})`);
+			}
+			const response = await new Promise<string>((resolve) => {
+				process.stdout.write(
+					chalk.yellow(
+						`\nClose ${cards.length} cards? This cannot be undone. (y/N) `
+					)
+				);
+				process.stdin.once('data', (d) =>
+					resolve(d.toString().trim().toLowerCase())
+				);
+			});
+			if (response !== 'y') {
+				console.log(chalk.dim('Aborted.'));
+				return;
+			}
+		}
+
+		const results: { card: Card; success: boolean; error?: string }[] = [];
+
+		for (const card of cards) {
+			let instance: WalletProvider;
+			try {
+				({ instance } = getCardProvider(card));
+			} catch {
+				results.push({ card, success: false, error: 'Provider not found' });
+				continue;
+			}
+
+			try {
+				await instance.closeCard(card.external_id);
+				updateCard(card.id, { status: 'closed' });
+				results.push({ card, success: true });
+			} catch (e) {
+				results.push({
+					card,
+					success: false,
+					error: e instanceof Error ? e.message : String(e),
+				});
+			}
+		}
+
+		const successCount = results.filter((r) => r.success).length;
+		const errorCount = results.filter((r) => !r.success).length;
+
+		console.log(chalk.green(`Closed ${successCount}/${cards.length} cards.`));
+		if (errorCount > 0) {
+			console.log(chalk.red(`Failed ${errorCount}:`));
+			for (const r of results.filter((r) => !r.success)) {
+				console.log(
+					chalk.red(`  - ${r.card.id.slice(0, 8)} ${r.card.name}: ${r.error}`)
+				);
+			}
+		}
+	});
+
+cardCmd
+	.command('freeze <id>')
+	.description('Freeze a card temporarily')
+	.option('--dry-run', 'Preview the action without executing')
+	.action(async (id: string, opts: { dryRun?: boolean }) => {
+		const cardId = resolveId(id, 'cards');
+		const card = getCard(cardId);
+		if (!card) {
+			console.error(chalk.red(`Card not found: ${id}`));
+			exit(EXIT_CODES.NOT_FOUND);
+		}
+
+		if (card.status !== 'active') {
+			console.error(chalk.red(`Card is not active: ${card.status}`));
+			exit(EXIT_CODES.VALIDATION);
+		}
+
+		if (opts.dryRun) {
+			console.log(
+				chalk.yellow(
+					`[dry-run] Would freeze card: ${card.id.slice(0, 8)} ${card.name}`
+				)
+			);
+			return;
+		}
+
+		try {
+			const { instance } = getCardProvider(card);
+			if (instance.freezeCard) {
+				await instance.freezeCard(card.external_id);
+			}
+			updateCard(cardId, { status: 'frozen' });
+			console.log(
+				chalk.green(`Card frozen: ${card.id.slice(0, 8)} ${card.name}`)
+			);
+		} catch (e) {
+			console.error(
+				chalk.red(
+					`Failed to freeze card: ${e instanceof Error ? e.message : String(e)}`
+				)
+			);
+			exit(EXIT_CODES.ERROR);
+		}
+	});
+
+cardCmd
+	.command('unfreeze <id>')
+	.description('Unfreeze a frozen card')
+	.option('--dry-run', 'Preview the action without executing')
+	.action(async (id: string, opts: { dryRun?: boolean }) => {
+		const cardId = resolveId(id, 'cards');
+		const card = getCard(cardId);
+		if (!card) {
+			console.error(chalk.red(`Card not found: ${id}`));
+			exit(EXIT_CODES.NOT_FOUND);
+		}
+
+		if (card.status !== 'frozen') {
+			console.error(chalk.red(`Card is not frozen: ${card.status}`));
+			exit(EXIT_CODES.VALIDATION);
+		}
+
+		if (opts.dryRun) {
+			console.log(
+				chalk.yellow(
+					`[dry-run] Would unfreeze card: ${card.id.slice(0, 8)} ${card.name}`
+				)
+			);
+			return;
+		}
+
+		try {
+			const { instance } = getCardProvider(card);
+			if (instance.unfreezeCard) {
+				await instance.unfreezeCard(card.external_id);
+			}
+			updateCard(cardId, { status: 'active' });
+			console.log(
+				chalk.green(`Card unfrozen: ${card.id.slice(0, 8)} ${card.name}`)
+			);
+		} catch (e) {
+			console.error(
+				chalk.red(
+					`Failed to unfreeze card: ${e instanceof Error ? e.message : String(e)}`
+				)
+			);
+			exit(EXIT_CODES.ERROR);
+		}
+	});
+
+cardCmd
+	.command('top-up <id>')
+	.description('Add funds to a card')
+	.requiredOption('-a, --amount <amount>', 'Amount to add in dollars')
+	.option('--dry-run', 'Preview the action without executing')
+	.action(
+		async (
+			id: string,
+			opts: { amount: string; dryRun?: boolean }
+		) => {
+			const cardId = resolveId(id, 'cards');
+			const card = getCard(cardId);
+			if (!card) {
+				console.error(chalk.red(`Card not found: ${id}`));
+				exit(EXIT_CODES.NOT_FOUND);
+			}
+
+			if (card.status === 'closed') {
+				console.error(chalk.red('Cannot top-up a closed card.'));
+				exit(EXIT_CODES.VALIDATION);
+			}
+
+			const amount = Number.parseFloat(opts.amount);
+			if (Number.isNaN(amount) || amount <= 0) {
+				console.error(
+					chalk.red('Invalid amount. Use a positive number (e.g., 50 or 100.50)')
+				);
+				exit(EXIT_CODES.VALIDATION);
+			}
+
+			if (opts.dryRun) {
+				console.log(
+					chalk.yellow(
+						`[dry-run] Would top-up card: ${card.id.slice(0, 8)} ${card.name} with $${amount.toFixed(2)}`
+					)
+				);
+				return;
+			}
+
+			try {
+				const { instance } = getCardProvider(card);
+				if (!instance.topUpCard) {
+					console.error(
+						chalk.red(
+							`Provider ${card.provider_id} does not support top-up`
+						)
+					);
+					exit(EXIT_CODES.ERROR);
+				}
+
+				const result = await instance.topUpCard(card.external_id, amount);
+				updateCardBalance(cardId, result.balance);
+
+				// Create a load transaction record
+				createTransaction({
+					card_id: cardId,
+					provider_id: card.provider_id,
+					type: 'load',
+					status: 'completed',
+					amount: amount,
+					currency: result.currency,
+					description: `Top-up of $${amount.toFixed(2)}`,
+					metadata: {},
+				});
+
+				const globalOpts = program.opts();
+				if (globalOpts.json) {
+					printJson({
+						card_id: card.id,
+						amount,
+						balance: result.balance,
+						currency: result.currency,
+					});
+				} else if (shouldOutput()) {
+					console.log(
+						chalk.green(
+							`Card topped up: ${card.id.slice(0, 8)} ${card.name} +$${amount.toFixed(2)} → balance $${result.balance.toFixed(2)}`
+						)
+					);
+				}
+			} catch (e) {
+				console.error(
+					chalk.red(
+						`Failed to top-up card: ${e instanceof Error ? e.message : String(e)}`
+					)
+				);
+				exit(EXIT_CODES.ERROR);
+			}
+		}
+	);
 
 // ── Rename command ─────────────────────────────────────────────────────────
 
 cardCmd
-  .command("rename <id> <name>")
-  .description("Rename a card")
-  .action(async (id: string, name: string) => {
-    const cardId = resolveId(id, "cards");
-    const card = getCard(cardId);
-    if (!card) {
-      console.error(chalk.red(`Card not found: ${id}`));
-      exit(EXIT_CODES.NOT_FOUND);
-    }
+	.command('rename <id> <name>')
+	.description('Rename a card')
+	.action(async (id: string, name: string) => {
+		const cardId = resolveId(id, 'cards');
+		const card = getCard(cardId);
+		if (!card) {
+			console.error(chalk.red(`Card not found: ${id}`));
+			exit(EXIT_CODES.NOT_FOUND);
+		}
 
-    updateCard(cardId, { name });
-    console.log(chalk.green(`Card renamed to "${name}"`));
-  });
+		updateCard(cardId, { name });
+		console.log(chalk.green(`Card renamed to "${name}"`));
+	});
+
+// ── Update command ────────────────────────────────────────────────────────
+
+cardCmd
+	.command('update <id>')
+	.description('Update card fields (status, spending_limit, metadata)')
+	.option('--name <name>', 'Set card name')
+	.option('--status <status>', 'Set card status (active, frozen, closed)')
+	.option('--spending-limit <limit>', 'Set spending limit', (v) => v === 'null' ? null : Number.parseFloat(v))
+	.option('--metadata <json>', 'Merge metadata JSON object', (v) => JSON.parse(v))
+	.action(async (id: string, opts: { name?: string; status?: string; spending_limit?: number | null; metadata?: Record<string, unknown> }) => {
+		const cardId = resolveId(id, 'cards');
+		const card = getCard(cardId);
+		if (!card) {
+			console.error(chalk.red(`Card not found: ${id}`));
+			exit(EXIT_CODES.NOT_FOUND);
+		}
+
+		const updates: import('../types/index.js').UpdateCardInput = {};
+		if (opts.name !== undefined) updates.name = opts.name;
+		if (opts.status !== undefined) {
+			const status = opts.status as import('../types/index.js').CardStatus;
+			if (!['active', 'frozen', 'closed'].includes(opts.status)) {
+				console.error(chalk.red(`Invalid status: ${opts.status}. Must be one of: active, frozen, closed`));
+				exit(EXIT_CODES.VALIDATION);
+			}
+			updates.status = status;
+		}
+		if (opts.spending_limit !== undefined) updates.spending_limit = opts.spending_limit;
+		if (opts.metadata !== undefined) {
+			updates.metadata = { ...card.metadata, ...opts.metadata };
+		}
+
+		if (Object.keys(updates).length === 0) {
+			console.error(chalk.red('No fields to update. Use --name, --status, --spending-limit, or --metadata.'));
+			exit(EXIT_CODES.VALIDATION);
+		}
+
+		updateCard(cardId, updates);
+		const globalOpts = program.opts();
+		if (globalOpts.json) {
+			printJson(getCard(cardId));
+		} else {
+			console.log(chalk.green(`Card updated: ${card.id.slice(0, 8)} ${card.name}`));
+		}
+	});
 
 // ── Profile command ────────────────────────────────────────────────────────
 
 cardCmd
-  .command("profile <id> [category]")
-  .description("Get or set card category/profile (e.g. business, personal, travel)")
-  .action(async (id: string, category?: string) => {
-    const cardId = resolveId(id, "cards");
-    const card = getCard(cardId);
-    if (!card) {
-      console.error(chalk.red(`Card not found: ${id}`));
-      exit(EXIT_CODES.NOT_FOUND);
-    }
+	.command('profile <id> [category]')
+	.description(
+		'Get or set card category/profile (e.g. business, personal, travel)'
+	)
+	.action(async (id: string, category?: string) => {
+		const cardId = resolveId(id, 'cards');
+		const card = getCard(cardId);
+		if (!card) {
+			console.error(chalk.red(`Card not found: ${id}`));
+			exit(EXIT_CODES.NOT_FOUND);
+		}
 
-    if (!category) {
-      // Get profile - show current category
-      const currentCategory = card.metadata?.category || null;
-      if (currentCategory) {
-        console.log(`${chalk.bold("Category:")} ${currentCategory}`);
-      } else {
-        console.log(chalk.dim("No category set. Usage: card profile <id> <category>"));
-      }
-      return;
-    }
+		if (!category) {
+			// Get profile - show current category
+			const currentCategory = card.metadata?.category || null;
+			if (currentCategory) {
+				console.log(`${chalk.bold('Category:')} ${currentCategory}`);
+			} else {
+				console.log(
+					chalk.dim('No category set. Usage: card profile <id> <category>')
+				);
+			}
+			return;
+		}
 
-    // Set profile
-    const trimmedCategory = category.trim().toLowerCase();
-    if (!trimmedCategory) {
-      console.error(chalk.red("Category cannot be empty"));
-      exit(EXIT_CODES.VALIDATION);
-    }
+		// Set profile
+		const trimmedCategory = category.trim().toLowerCase();
+		if (!trimmedCategory) {
+			console.error(chalk.red('Category cannot be empty'));
+			exit(EXIT_CODES.VALIDATION);
+		}
 
-    const updatedMetadata = { ...card.metadata, category: trimmedCategory };
-    updateCard(cardId, { metadata: updatedMetadata });
-    console.log(chalk.green(`Card category set to "${trimmedCategory}"`));
-  });
+		const updatedMetadata = { ...card.metadata, category: trimmedCategory };
+		updateCard(cardId, { metadata: updatedMetadata });
+		console.log(chalk.green(`Card category set to "${trimmedCategory}"`));
+	});
 
 // ── Balance command ────────────────────────────────────────────────────────
 
 program
-  .command("balance [card-id]")
-  .description("Check balance of a card or all cards")
-  .action(async (cardId?: string) => {
-    if (cardId) {
-      const resolved = resolveId(cardId, "cards");
-      const card = getCard(resolved);
-      if (!card) {
-        console.error(chalk.red(`Card not found: ${cardId}`));
-        exit(EXIT_CODES.ERROR);
-      }
+	.command('balance [card-id]')
+	.description('Check balance of a card or all cards')
+	.option('--dry-run', 'Preview the action without executing')
+	.action(async (cardId: string | undefined, opts: { dryRun?: boolean }) => {
+		if (cardId) {
+			const resolved = resolveId(cardId, 'cards');
+			const card = getCard(resolved);
+			if (!card) {
+				console.error(chalk.red(`Card not found: ${cardId}`));
+				exit(EXIT_CODES.ERROR);
+			}
 
-      const provider = getProvider(card.provider_id);
-      if (!provider) {
-        console.error(chalk.red(`Provider not found for card`));
-        exit(EXIT_CODES.ERROR);
-      }
+			if (opts.dryRun) {
+				console.log(
+					chalk.yellow(
+						`[dry-run] Would fetch balance for card: ${card.id.slice(0, 8)} ${card.name}`
+					)
+				);
+				return;
+			}
 
-      const providerConfig = { ...provider.config, ...(getProviderConfig(provider.name) || {}) };
-      const instance = getProviderInstance(provider.type, providerConfig);
-
-      try {
-        const { balance, currency } = await instance.getBalance(card.external_id);
-        const globalOpts = program.opts();
-        if (globalOpts["json"]) {
-          printJson({ card_id: card.id, balance, currency });
-        } else {
-          console.log(`${chalk.dim(card.id.slice(0, 8))} ${card.name}: ${chalk.green(`$${balance.toFixed(2)}`)} ${currency}`);
-        }
-      } catch (e) {
-        console.error(chalk.red(`Failed to get balance: ${e instanceof Error ? e.message : String(e)}`));
-        exit(EXIT_CODES.ERROR);
-      }
-    } else {
-      const cards = listCards({ status: "active" });
-      if (cards.length === 0) {
-        console.log(chalk.yellow("No active cards."));
-        return;
-      }
-      for (const card of cards) {
-        console.log(`${chalk.dim(card.id.slice(0, 8))} ${card.name}: ${chalk.green(`$${card.balance.toFixed(2)}`)} ${card.currency}`);
-      }
-    }
-  });
+			try {
+				const { instance } = getCardProvider(card);
+				const { balance, currency } = await instance.getBalance(
+					card.external_id
+				);
+				updateCardBalance(card.id, balance);
+				const globalOpts = program.opts();
+				if (globalOpts.json) {
+					printJson({ card_id: card.id, balance, currency });
+				} else {
+					console.log(
+						`${chalk.dim(card.id.slice(0, 8))} ${card.name}: ${chalk.green(`$${balance.toFixed(2)}`)} ${currency}`
+					);
+				}
+			} catch (e) {
+				console.error(
+					chalk.red(
+						`Failed to get balance: ${e instanceof Error ? e.message : String(e)}`
+					)
+				);
+				exit(EXIT_CODES.ERROR);
+			}
+		} else {
+			const cards = listCards({ status: 'active' });
+			if (cards.length === 0) {
+				console.log(chalk.yellow('No active cards.'));
+				return;
+			}
+			if (opts.dryRun) {
+				console.log(
+					chalk.yellow(`[dry-run] Would fetch balance for ${cards.length} card(s):`)
+				);
+				for (const card of cards) {
+					console.log(
+						chalk.yellow(
+							`  - ${card.id.slice(0, 8)} ${card.name}: current balance $${card.balance.toFixed(2)}`
+						)
+					);
+				}
+				return;
+			}
+			for (const card of cards) {
+				console.log(
+					`${chalk.dim(card.id.slice(0, 8))} ${card.name}: ${chalk.green(`$${card.balance.toFixed(2)}`)} ${card.currency}`
+				);
+			}
+		}
+	});
 
 // ── Transactions command ───────────────────────────────────────────────────
 
 program
-  .command("transactions [card-id]")
-  .description("List transactions")
-  .option("-n, --limit <n>", "Limit results", "20")
-  .option("-o, --offset <n>", "Offset for pagination", "0")
-  .option("-f, --format <type>", "Output format: table, json, csv", "table")
-  .action((cardId: string | undefined, opts: { limit: string; offset: string; format?: string }) => {
-    let resolvedCardId: string | undefined;
-    if (cardId) {
-      resolvedCardId = resolveId(cardId, "cards");
-    }
+	.command('transactions [card-id]')
+	.description('List transactions')
+	.option('-n, --limit <n>', 'Limit results', '20')
+	.option('-o, --offset <n>', 'Offset for pagination', '0')
+	.option('-f, --format <type>', 'Output format: table, json, csv', 'table')
+	.option('--dry-run', 'Preview the action without executing')
+	.action(
+		(
+			cardId: string | undefined,
+			opts: { limit: string; offset: string; format?: string; dryRun?: boolean }
+		) => {
+			let resolvedCardId: string | undefined;
+			if (cardId) {
+				resolvedCardId = resolveId(cardId, 'cards');
+			}
 
-    const limit = parseInt(opts.limit, 10);
-    const offset = parseInt(opts.offset, 10);
+			const limit = Number.parseInt(opts.limit, 10);
+			const offset = Number.parseInt(opts.offset, 10);
 
-    const txns = listTransactions({
-      card_id: resolvedCardId,
-      limit,
-      offset,
-    });
+			if (opts.dryRun) {
+				console.log(
+					chalk.yellow(
+						`[dry-run] Would list transactions: cardId=${cardId || 'all'}, limit=${limit}, offset=${offset}`
+					)
+				);
+				return;
+			}
 
-    const globalOpts = program.opts();
-    const format = opts.format || (globalOpts["json"] ? "json" : "table");
+			const txns = listTransactions({
+				card_id: resolvedCardId,
+				limit,
+				offset,
+			});
 
-    if (format === "json") {
-      printJson({ transactions: txns, limit, offset, count: txns.length });
-      return;
-    }
+			const globalOpts = program.opts();
+			const format = opts.format || (globalOpts.json ? 'json' : 'table');
 
-    if (format === "csv") {
-      console.log("id,type,status,amount,card_id,merchant,description,created_at");
-      for (const tx of txns) {
-        console.log(`${tx.id},${tx.type},${tx.status},${tx.amount},${tx.card_id},"${tx.merchant || ""}","${tx.description || ""}",${tx.created_at}`);
-      }
-      return;
-    }
+			if (format === 'json') {
+				printJson({ transactions: txns, limit, offset, count: txns.length });
+				return;
+			}
 
-    if (txns.length === 0) {
-      console.log(chalk.yellow("No transactions found."));
-      return;
-    }
+			if (format === 'csv') {
+				console.log(
+					'id,type,status,amount,card_id,merchant,description,created_at'
+				);
+				for (const tx of txns) {
+					console.log(
+						`${tx.id},${tx.type},${tx.status},${tx.amount},${tx.card_id},"${tx.merchant || ''}","${tx.description || ''}",${tx.created_at}`
+					);
+				}
+				return;
+			}
 
-    console.log(chalk.bold("Transactions:"));
-    for (const tx of txns) {
-      console.log(`  ${formatTransaction(tx)}`);
-    }
-    if (offset > 0 || txns.length === limit) {
-      console.log(chalk.dim(`  (offset: ${offset}, showing ${txns.length})`));
-    }
-  });
+			if (txns.length === 0) {
+				console.log(chalk.yellow('No transactions found.'));
+				return;
+			}
+
+			console.log(chalk.bold('Transactions:'));
+			for (const tx of txns) {
+				console.log(`  ${formatTransaction(tx)}`);
+			}
+			if (offset > 0 || txns.length === limit) {
+				console.log(chalk.dim(`  (offset: ${offset}, showing ${txns.length})`));
+			}
+		}
+	);
 
 // ── Sync command ──────────────────────────────────────────────────────────
 
 program
-  .command("sync [card-id]")
-  .description("Sync transactions from provider for a card or all cards")
-  .option("-p, --provider <name>", "Provider name (uses default if omitted)")
-  .action(async (cardId: string | undefined, opts: { provider?: string }) => {
-    const config = loadConfig();
-    const providerName = opts.provider || config.default_provider;
+	.command('sync [card-id]')
+	.description('Sync transactions from provider for a card or all cards')
+	.option('-p, --provider <name>', 'Provider name (uses default if omitted)')
+	.option('--dry-run', 'Preview the action without executing')
+	.action(async (cardId: string | undefined, opts: { provider?: string; dryRun?: boolean }) => {
+		const config = loadConfig();
+		const providerName = opts.provider || config.default_provider;
 
-    if (!providerName) {
-      console.error(chalk.red("No provider specified and no default set. Use --provider or set a default."));
-      exit(EXIT_CODES.VALIDATION);
-    }
+		if (!providerName) {
+			console.error(
+				chalk.red(
+					'No provider specified and no default set. Use --provider or set a default.'
+				)
+			);
+			exit(EXIT_CODES.VALIDATION);
+		}
 
-    const providerRecord = getProviderByName(providerName);
-    if (!providerRecord) {
-      console.error(chalk.red(`Provider not found: ${providerName}`));
-      exit(EXIT_CODES.NOT_FOUND);
-    }
+		const { instance } = resolveProvider(providerName);
 
-    const providerConfig = { ...providerRecord.config, ...(getProviderConfig(providerName) || {}) };
-    const instance = getProviderInstance(providerRecord.type, providerConfig);
+		if (!instance.getTransactions) {
+			console.error(
+				chalk.red(
+					`Provider "${providerName}" does not support transaction sync.`
+				)
+			);
+			exit(EXIT_CODES.VALIDATION);
+		}
 
-    if (!instance.getTransactions) {
-      console.error(chalk.red(`Provider "${providerName}" does not support transaction sync.`));
-      exit(EXIT_CODES.VALIDATION);
-    }
+		const cards = cardId
+			? [getCard(resolveId(cardId, 'cards'))!].filter(Boolean)
+			: listCards();
 
-    const cards = cardId ? [getCard(resolveId(cardId, "cards"))!].filter(Boolean) : listCards();
+		if (opts.dryRun) {
+			console.log(
+				chalk.yellow(
+					`[dry-run] Would sync ${cards.length} card(s) from provider "${providerName}":`
+				)
+			);
+			for (const card of cards) {
+				if (!card) continue;
+				console.log(
+					chalk.yellow(
+						`  - ${card.id.slice(0, 8)} ${card.name}: external_id=${card.external_id}`
+					)
+				);
+			}
+			return;
+		}
 
-    let synced = 0;
-    let errors = 0;
+		let synced = 0;
+		let errors = 0;
 
-    for (const card of cards) {
-      if (!card) continue;
+		for (const card of cards) {
+			if (!card) continue;
 
-      process.stdout.write(chalk.dim(`Syncing ${card.name}... `));
+			process.stdout.write(chalk.dim(`Syncing ${card.name}... `));
 
-      try {
-        const remoteTxns = await instance.getTransactions!(card.external_id);
+			try {
+				const remoteTxns = await instance.getTransactions?.(card.external_id);
 
-        // Import transactions not already in DB (by external_id)
-        for (const tx of remoteTxns) {
-          const existing = listTransactions({ card_id: card.id }).find((t) => t.external_id === tx.external_id);
-          if (!existing) {
-            createTransaction({
-              card_id: card.id,
-              provider_id: card.provider_id,
-              external_id: tx.external_id ?? undefined,
-              type: tx.type,
-              status: tx.status,
-              amount: tx.amount,
-              currency: tx.currency,
-              merchant: tx.merchant ?? undefined,
-              description: tx.description ?? undefined,
-              metadata: tx.metadata ?? {},
-            });
-            synced++;
-          }
-        }
-        process.stdout.write(chalk.green("✓") + chalk.dim(` (${remoteTxns.length} txns)\n`));
-      } catch (e) {
-        errors++;
-        process.stdout.write(chalk.red("✗") + chalk.dim(` (${e instanceof Error ? e.message : String(e)})\n`));
-      }
-    }
+				// Batch-load existing transaction external_ids to avoid N+1
+				const existingExternalIds = new Set(
+					listTransactions({ card_id: card.id }).map((t) => t.external_id)
+				);
 
-    if (errors > 0) {
-      console.log(chalk.yellow(`\nSynced ${synced} new transactions. ${errors} card(s) had errors.`));
-    } else {
-      console.log(chalk.green(`\nSynced ${synced} new transactions from ${cards.length} card(s).`));
-    }
-  });
+				// Import transactions not already in DB (by external_id)
+				for (const tx of remoteTxns) {
+					if (existingExternalIds.has(tx.external_id)) continue;
+					createTransaction({
+						card_id: card.id,
+						provider_id: card.provider_id,
+						external_id: tx.external_id ?? undefined,
+						type: tx.type,
+						status: tx.status,
+						amount: tx.amount,
+						currency: tx.currency,
+						merchant: tx.merchant ?? undefined,
+						description: tx.description ?? undefined,
+						metadata: tx.metadata ?? {},
+					});
+					synced++;
+				}
+
+				// Update card balance if provider supports it
+				if (instance.getBalance) {
+					const { balance } = await instance.getBalance(card.external_id);
+					updateCardBalance(card.id, balance);
+				}
+
+				process.stdout.write(
+					chalk.green('✓') + chalk.dim(` (${remoteTxns.length} txns)\n`)
+				);
+			} catch (e) {
+				errors++;
+				process.stdout.write(
+					chalk.red('✗') +
+						chalk.dim(` (${e instanceof Error ? e.message : String(e)})\n`)
+				);
+			}
+		}
+
+		if (errors > 0) {
+			console.log(
+				chalk.yellow(
+					`\nSynced ${synced} new transactions. ${errors} card(s) had errors.`
+				)
+			);
+		} else {
+			console.log(
+				chalk.green(
+					`\nSynced ${synced} new transactions from ${cards.length} card(s).`
+				)
+			);
+		}
+	});
 
 // ── Stats command ─────────────────────────────────────────────────────────
 
+const STATS_TTL_MS = 60_000; // 60 seconds
+
 cardCmd
-  .command("stats [id]")
-  .description("Show spending statistics for a card (or all cards)")
-  .option("-p, --period <days>", "Stats period in days", "30")
-  .action((id: string | undefined, opts: { period?: string }) => {
-    const period = parseInt(opts.period || "30", 10);
-    const since = new Date(Date.now() - period * 24 * 60 * 60 * 1000).toISOString();
+	.command('stats [id]')
+	.description('Show spending statistics for a card (or all cards)')
+	.option('-p, --period <days>', 'Stats period in days', '30')
+	.action((id: string | undefined, opts: { period?: string }) => {
+		const period = Number.parseInt(opts.period || '30', 10);
+		const since = new Date(
+			Date.now() - period * 24 * 60 * 60 * 1000
+		).toISOString();
 
-    let cardIds: string[] = [];
-    if (id) {
-      cardIds = [resolveId(id, "cards")];
-    } else {
-      cardIds = listCards().map((c) => c.id);
-    }
+		let cardIds: string[] = [];
+		if (id) {
+			cardIds = [resolveId(id, 'cards')];
+		} else {
+			cardIds = listCards().map((c) => c.id);
+		}
 
-    const globalOpts = program.opts();
-    const useJson = globalOpts["json"];
+		const globalOpts = program.opts();
+		const useJson = globalOpts.json;
 
-    for (const cardId of cardIds) {
-      const card = getCard(cardId);
-      if (!card) continue;
+		for (const cardId of cardIds) {
+			const card = getCard(cardId);
+			if (!card) continue;
 
-      const txns = listTransactions({ card_id: cardId, limit: 10000 });
-      const periodTxns = txns.filter((tx) => tx.created_at >= since && (tx.type === "purchase" || tx.type === "withdrawal"));
+			// Compute stats with caching (TTL 60s)
+			const stats = cached<{
+				netSpent: number;
+				txnCount: number;
+				avgTxn: number;
+				topMerchants: { merchant: string; amount: number }[];
+			}>(`stats:${cardId}:${period}`, STATS_TTL_MS, () => {
+				const txns = listTransactions({ card_id: cardId, limit: 10000 });
+				const periodTxns = txns.filter(
+					(tx) =>
+						tx.created_at >= since &&
+						(tx.type === 'purchase' || tx.type === 'withdrawal')
+				);
 
-      const totalSpent = periodTxns.filter((tx) => tx.type === "purchase" || tx.type === "withdrawal").reduce((sum, tx) => sum + tx.amount, 0);
-      const totalRefunds = periodTxns.filter((tx) => tx.type === "refund").reduce((sum, tx) => sum + tx.amount, 0);
-      const netSpent = totalSpent - totalRefunds;
-      const txnCount = periodTxns.length;
-      const avgTxn = txnCount > 0 ? netSpent / txnCount : 0;
+				const totalSpent = periodTxns
+					.filter((tx) => tx.type === 'purchase' || tx.type === 'withdrawal')
+					.reduce((sum, tx) => sum + tx.amount, 0);
+				const totalRefunds = periodTxns
+					.filter((tx) => tx.type === 'refund')
+					.reduce((sum, tx) => sum + tx.amount, 0);
+				const netSpent = totalSpent - totalRefunds;
+				const txnCount = periodTxns.length;
+				const avgTxn = txnCount > 0 ? netSpent / txnCount : 0;
 
-      const merchantSpend: Record<string, number> = {};
-      for (const tx of periodTxns) {
-        if ((tx.type === "purchase" || tx.type === "withdrawal") && tx.merchant) {
-          merchantSpend[tx.merchant] = (merchantSpend[tx.merchant] || 0) + tx.amount;
-        }
-      }
-      const topMerchants = Object.entries(merchantSpend)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 5)
-        .map(([m, amt]) => ({ merchant: m, amount: amt }));
+				const merchantSpend: Record<string, number> = {};
+				for (const tx of periodTxns) {
+					if (
+						(tx.type === 'purchase' || tx.type === 'withdrawal') &&
+						tx.merchant
+					) {
+						merchantSpend[tx.merchant] =
+							(merchantSpend[tx.merchant] || 0) + tx.amount;
+					}
+				}
+				const topMerchants = Object.entries(merchantSpend)
+					.sort((a, b) => b[1] - a[1])
+					.slice(0, 5)
+					.map(([m, amt]) => ({ merchant: m, amount: amt }));
 
-      if (useJson) {
-        printJson({ card: card.name, period_days: period, total_spent: netSpent, transaction_count: txnCount, average_transaction: avgTxn, top_merchants: topMerchants });
-        continue;
-      }
+				return { netSpent, txnCount, avgTxn, topMerchants };
+			});
 
-      console.log(chalk.bold(`\nCard: ${card.name} (${card.id.slice(0, 8)})`));
-      console.log(`  Period: last ${period} days`);
-      console.log(`  Net spent: ${chalk.green("$" + netSpent.toFixed(2))}`);
-      console.log(`  Transactions: ${txnCount} (avg ${chalk.dim("$" + avgTxn.toFixed(2))})`);
-      if (topMerchants.length > 0) {
-        console.log(chalk.dim("  Top merchants:"));
-        for (const { merchant, amount } of topMerchants) {
-          console.log(chalk.dim(`    ${merchant}: $${amount.toFixed(2)}`));
-        }
-      }
-    }
-  });
+			if (useJson) {
+				printJson({
+					card: card.name,
+					period_days: period,
+					total_spent: stats.netSpent,
+					transaction_count: stats.txnCount,
+					average_transaction: stats.avgTxn,
+					top_merchants: stats.topMerchants,
+				});
+				continue;
+			}
+
+			console.log(chalk.bold(`\nCard: ${card.name} (${card.id.slice(0, 8)})`));
+			console.log(`  Period: last ${period} days`);
+			console.log(`  Net spent: ${chalk.green(`$${stats.netSpent.toFixed(2)}`)}`);
+			console.log(
+				`  Transactions: ${stats.txnCount} (avg ${chalk.dim(`$${stats.avgTxn.toFixed(2)}`)})`
+			);
+			if (stats.topMerchants.length > 0) {
+				console.log(chalk.dim('  Top merchants:'));
+				for (const { merchant, amount } of stats.topMerchants) {
+					console.log(chalk.dim(`    ${merchant}: $${amount.toFixed(2)}`));
+				}
+			}
+		}
+	});
 
 // ── Doctor command ─────────────────────────────────────────────────────────
 
 program
-  .command("doctor")
-  .description("Run diagnostics and check wallet health")
-  .option("--fix", "Automatically fix recoverable issues (create config dir/file)")
-  .action((opts: { fix?: boolean }) => {
-    const result = runDoctor(opts.fix);
-    const globalOpts = program.opts();
+	.command('doctor')
+	.description('Run diagnostics and check wallet health')
+	.option(
+		'--fix',
+		'Automatically fix recoverable issues (create config dir/file)'
+	)
+	.action((opts: { fix?: boolean }) => {
+		const result = runDoctor(opts.fix);
+		const globalOpts = program.opts();
 
-    if (globalOpts["json"]) {
-      printJson(result);
-      return;
-    }
+		if (globalOpts.json) {
+			printJson(result);
+			return;
+		}
 
-    console.log(chalk.bold("Wallet Health Check:"));
-    console.log();
-    for (const check of result.checks) {
-      const icon = check.status === "ok" ? chalk.green("[ok]") : check.status === "warn" ? chalk.yellow("[!!]") : chalk.red("[ERR]");
-      console.log(`  ${icon} ${chalk.bold(check.name)}: ${check.message}`);
-    }
-    console.log();
-    if (result.healthy) {
-      console.log(chalk.green("All checks passed."));
-    } else {
-      console.log(chalk.red("Some checks failed. Run 'wallets doctor' with --json for details."));
-    }
-  });
-
+		console.log(chalk.bold('Wallet Health Check:'));
+		console.log();
+		for (const check of result.checks) {
+			const icon =
+				check.status === 'ok'
+					? chalk.green('[ok]')
+					: check.status === 'warn'
+						? chalk.yellow('[!!]')
+						: chalk.red('[ERR]');
+			console.log(`  ${icon} ${chalk.bold(check.name)}: ${check.message}`);
+		}
+		console.log();
+		if (result.healthy) {
+			console.log(chalk.green('All checks passed.'));
+		} else {
+			console.log(
+				chalk.red(
+					"Some checks failed. Run 'wallets doctor' with --json for details."
+				)
+			);
+		}
+	});
 
 // ── Init command ───────────────────────────────────────────────────────────
 
-import { createInterface } from "readline";
+import { createInterface } from 'node:readline';
 
 function prompt(question: string): Promise<string> {
-  return new Promise((resolve) => {
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    rl.question(question, (answer) => {
-      rl.close();
-      resolve(answer.trim());
-    });
-  });
+	return new Promise((resolve) => {
+		const rl = createInterface({
+			input: process.stdin,
+			output: process.stdout,
+		});
+		rl.question(question, (answer) => {
+			rl.close();
+			resolve(answer.trim());
+		});
+	});
 }
 
 function promptSecret(question: string): Promise<string> {
-  return new Promise((resolve) => {
-    const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
-    rl.question(question, (answer) => {
-      rl.close();
-      resolve(answer.trim());
-    });
-  });
+	return new Promise((resolve) => {
+		const rl = createInterface({
+			input: process.stdin,
+			output: process.stdout,
+			terminal: true,
+		});
+		rl.question(question, (answer) => {
+			rl.close();
+			resolve(answer.trim());
+		});
+	});
 }
 
 async function runInit(): Promise<void> {
-  const configDir = getConfigDir();
-  const configPath = getConfigPath();
+	const configDir = getConfigDir();
+	const configPath = getConfigPath();
 
-  console.log(chalk.bold("\n🔖 Wallets Init\n"));
-  console.log(`Config directory: ${chalk.dim(configDir)}`);
+	console.log(chalk.bold('\n🔖 Wallets Init\n'));
+	console.log(`Config directory: ${chalk.dim(configDir)}`);
 
-  if (existsSync(configPath)) {
-    const existing = loadConfig();
-    if (existing.providers && Object.keys(existing.providers).length > 0) {
-      console.log(chalk.yellow("\nWallets is already configured.\n"));
-      const overwrite = await prompt("Overwrite existing config? (y/N): ");
-      if (overwrite.toLowerCase() !== "y") {
-        console.log(chalk.dim("Aborted."));
-        return;
-      }
-    }
-  }
+	if (existsSync(configPath)) {
+		const existing = loadConfig();
+		if (existing.default_provider) {
+			console.log(chalk.yellow('\nWallets is already configured.\n'));
+			const overwrite = await prompt('Overwrite existing config? (y/N): ');
+			if (overwrite.toLowerCase() !== 'y') {
+				console.log(chalk.dim('Aborted.'));
+				return;
+			}
+		}
+	}
 
-  console.log(chalk.dim("\nAvailable providers: agentcard\n"));
+	console.log(chalk.dim('\nAvailable providers: agentcard\n'));
 
-  const providerType = await prompt("Provider type [agentcard]: ");
-  const type = providerType.trim() || "agentcard";
+	const providerType = await prompt('Provider type [agentcard]: ');
+	const type = providerType.trim() || 'agentcard';
 
-  if (type !== "agentcard") {
-    console.error(chalk.red(`Unknown provider type: ${type}`));
-    exit(EXIT_CODES.ERROR);
-    return;
-  }
+	if (type !== 'agentcard') {
+		console.error(chalk.red(`Unknown provider type: ${type}`));
+		exit(EXIT_CODES.ERROR);
+		return;
+	}
 
-  const jwt = await promptSecret("AgentCard JWT token: ");
-  if (!jwt) {
-    console.error(chalk.red("JWT token is required."));
-    exit(EXIT_CODES.VALIDATION);
-    return;
-  }
+	const jwt = await promptSecret('AgentCard JWT token: ');
+	if (!jwt) {
+		console.error(chalk.red('JWT token is required.'));
+		exit(EXIT_CODES.VALIDATION);
+		return;
+	}
 
-  const baseUrl = await prompt("AgentCard base URL [https://api.agentcard.sh]: ");
-  const url = baseUrl.trim() || "https://api.agentcard.sh";
+	const baseUrl = await prompt(
+		'AgentCard base URL [https://api.agentcard.sh]: '
+	);
+	const url = baseUrl.trim() || 'https://api.agentcard.sh';
 
-  const defaultCurrency = await prompt("Default currency [USD]: ");
-  const currency = defaultCurrency.trim() || "USD";
+	const defaultCurrency = await prompt('Default currency [USD]: ');
+	const currency = defaultCurrency.trim() || 'USD';
 
-  const config: WalletsConfig = {
-    default_provider: type,
-    default_currency: currency,
-    providers: {
-      [type]: {
-        jwt,
-        baseUrl: url,
-      },
-    },
-  };
+	const config: WalletsConfig = {
+		default_provider: type,
+		default_currency: currency,
+	};
 
-  try {
-    mkdirSync(configDir, { recursive: true });
-    saveConfig(config);
-    console.log(chalk.green("\n✓ Configuration saved.\n"));
-  } catch (e) {
-    console.error(chalk.red(`Failed to save config: ${e instanceof Error ? e.message : String(e)}`));
-    exit(EXIT_CODES.ERROR);
-  }
+	try {
+		mkdirSync(configDir, { recursive: true });
 
-  const result = runDoctor(true);
-  if (result.healthy) {
-    console.log(chalk.green("Setup complete! Run ") + chalk.bold("wallets doctor") + chalk.green(" to verify.\n"));
-  } else {
-    console.log(chalk.yellow("\nSetup complete, but some checks failed. Run ") + chalk.bold("wallets doctor --fix") + chalk.yellow(" for details.\n"));
-  }
+		// Register provider in DB with credentials
+		ensureProvider(type, type, { jwt, baseUrl: url });
+
+		saveConfig(config);
+		console.log(chalk.green('\n✓ Configuration saved.\n'));
+	} catch (e) {
+		console.error(
+			chalk.red(
+				`Failed to save config: ${e instanceof Error ? e.message : String(e)}`
+			)
+		);
+		exit(EXIT_CODES.ERROR);
+	}
+
+	const result = runDoctor(true);
+	if (result.healthy) {
+		console.log(
+			chalk.green('Setup complete! Run ') +
+				chalk.bold('wallets doctor') +
+				chalk.green(' to verify.\n')
+		);
+	} else {
+		console.log(
+			chalk.yellow('\nSetup complete, but some checks failed. Run ') +
+				chalk.bold('wallets doctor --fix') +
+				chalk.yellow(' for details.\n')
+		);
+	}
 }
 
 program
-  .command("init")
-  .description("Initialize wallets configuration (interactive wizard)")
-  .action(async () => {
-    try {
-      await runInit();
-    } catch (e) {
-      console.error(chalk.red(`Init failed: ${e instanceof Error ? e.message : String(e)}`));
-      exit(EXIT_CODES.ERROR);
-    }
-  });
+	.command('init')
+	.description('Initialize wallets configuration (interactive wizard)')
+	.action(async () => {
+		try {
+			await runInit();
+		} catch (e) {
+			console.error(
+				chalk.red(`Init failed: ${e instanceof Error ? e.message : String(e)}`)
+			);
+			exit(EXIT_CODES.ERROR);
+		}
+	});
 
 // ── Ping command ───────────────────────────────────────────────────────────
 
 program
-  .command("ping")
-  .description("Check if the CLI is responding (for health checks)")
-  .action(() => {
-    const globalOpts = program.opts();
-    if (globalOpts["json"]) {
-      printJson({ status: "ok", timestamp: new Date().toISOString() });
-    } else {
-      console.log(chalk.green("pong"));
-    }
-  });
+	.command('ping')
+	.description('Check if the CLI is responding (for health checks)')
+	.action(() => {
+		const globalOpts = program.opts();
+		if (globalOpts.json) {
+			printJson({ status: 'ok', timestamp: new Date().toISOString() });
+		} else {
+			console.log(chalk.green('pong'));
+		}
+	});
 
 // ── MCP command ────────────────────────────────────────────────────────────
 
 program
-  .command("mcp")
-  .description("Install/configure MCP server for AI agents")
-  .option("--claude", "Install for Claude Code")
-  .option("--codex", "Install for Codex")
-  .option("--gemini", "Install for Gemini")
-  .option("--all", "Install for all agents")
-  .option("--uninstall", "Uninstall MCP server")
-  .action((opts: { claude?: boolean; codex?: boolean; gemini?: boolean; all?: boolean; uninstall?: boolean }) => {
-    const targets: string[] = [];
-    if (opts.all) {
-      targets.push("claude", "codex", "gemini");
-    } else {
-      if (opts.claude) targets.push("claude");
-      if (opts.codex) targets.push("codex");
-      if (opts.gemini) targets.push("gemini");
-    }
+	.command('mcp')
+	.description('Install/configure MCP server for AI agents')
+	.option('--claude', 'Install for Claude Code')
+	.option('--codex', 'Install for Codex')
+	.option('--gemini', 'Install for Gemini')
+	.option('--all', 'Install for all agents')
+	.option('--uninstall', 'Uninstall MCP server')
+	.action(
+		(opts: {
+			claude?: boolean;
+			codex?: boolean;
+			gemini?: boolean;
+			all?: boolean;
+			uninstall?: boolean;
+		}) => {
+			const targets: string[] = [];
+			if (opts.all) {
+				targets.push('claude', 'codex', 'gemini');
+			} else {
+				if (opts.claude) targets.push('claude');
+				if (opts.codex) targets.push('codex');
+				if (opts.gemini) targets.push('gemini');
+			}
 
-    if (targets.length === 0) {
-      targets.push("claude");
-    }
+			if (targets.length === 0) {
+				targets.push('claude');
+			}
 
-    for (const target of targets) {
-      try {
-        if (target === "claude") {
-          if (opts.uninstall) {
-            execSync("claude mcp remove wallets", { encoding: "utf-8" });
-            console.log(chalk.green("Removed wallets MCP from Claude Code"));
-          } else {
-            execSync("claude mcp add --transport stdio --scope user wallets -- wallets-mcp", { encoding: "utf-8" });
-            console.log(chalk.green("Installed wallets MCP for Claude Code"));
-          }
-        } else if (target === "codex") {
-          console.log(chalk.yellow(`Codex MCP setup: Add to ~/.codex/config.toml:`));
-          console.log(chalk.dim(`  [mcp_servers.wallets]`));
-          console.log(chalk.dim(`  command = "wallets-mcp"`));
-          console.log(chalk.dim(`  args = []`));
-        } else if (target === "gemini") {
-          console.log(chalk.yellow(`Gemini MCP setup: Add to ~/.gemini/settings.json:`));
-          console.log(chalk.dim(`  "wallets": { "command": "wallets-mcp", "args": [] }`));
-        }
-      } catch (e) {
-        console.error(chalk.red(`Failed to setup MCP for ${target}: ${e instanceof Error ? e.message : String(e)}`));
-      }
-    }
-  });
+			for (const target of targets) {
+				try {
+					if (target === 'claude') {
+						if (opts.uninstall) {
+							execSync('claude mcp remove wallets', { encoding: 'utf-8' });
+							console.log(chalk.green('Removed wallets MCP from Claude Code'));
+						} else {
+							execSync(
+								'claude mcp add --transport stdio --scope user wallets -- wallets-mcp',
+								{ encoding: 'utf-8' }
+							);
+							console.log(chalk.green('Installed wallets MCP for Claude Code'));
+						}
+					} else if (target === 'codex') {
+						console.log(
+							chalk.yellow('Codex MCP setup: Add to ~/.codex/config.toml:')
+						);
+						console.log(chalk.dim('  [mcp_servers.wallets]'));
+						console.log(chalk.dim(`  command = "wallets-mcp"`));
+						console.log(chalk.dim('  args = []'));
+					} else if (target === 'gemini') {
+						console.log(
+							chalk.yellow('Gemini MCP setup: Add to ~/.gemini/settings.json:')
+						);
+						console.log(
+							chalk.dim(`  "wallets": { "command": "wallets-mcp", "args": [] }`)
+						);
+					}
+				} catch (e) {
+					console.error(
+						chalk.red(
+							`Failed to setup MCP for ${target}: ${e instanceof Error ? e.message : String(e)}`
+						)
+					);
+				}
+			}
+		}
+	);
 
 // ── Agent commands ─────────────────────────────────────────────────────────
 
-const agentCmd = program.command("agent").description("Manage agent registrations");
+const agentCmd = program
+	.command('agent')
+	.description('Manage agent registrations');
 
 agentCmd
-  .command("list")
-  .description("List registered agents")
-  .action(() => {
-    const agents = listAgents();
-    const globalOpts = program.opts();
+	.command('list')
+	.description('List registered agents')
+	.action(() => {
+		const agents = listAgents();
+		const globalOpts = program.opts();
 
-    if (globalOpts["json"]) {
-      printJson(agents);
-      return;
-    }
+		if (globalOpts.json) {
+			printJson(agents);
+			return;
+		}
 
-    if (agents.length === 0) {
-      console.log(chalk.yellow("No agents registered."));
-      return;
-    }
+		if (agents.length === 0) {
+			console.log(chalk.yellow('No agents registered.'));
+			return;
+		}
 
-    for (const agent of agents) {
-      const lastSeen = new Date(agent.last_seen_at).toLocaleString();
-      console.log(`  ${chalk.bold(agent.name)} ${chalk.dim(agent.id)}`);
-      if (agent.description) console.log(`    ${chalk.dim("desc:")} ${agent.description}`);
-      console.log(`    ${chalk.dim("last seen:")} ${lastSeen}`);
-    }
-  });
-
-agentCmd
-  .command("register <name>")
-  .description("Register an agent")
-  .option("-d, --description <text>", "Agent description")
-  .action((name: string, opts: { description?: string }) => {
-    const agent = registerAgent({ name, description: opts.description });
-    console.log(chalk.green(`Agent registered: ${agent.id} ${agent.name}`));
-  });
+		for (const agent of agents) {
+			const lastSeen = new Date(agent.last_seen_at).toLocaleString();
+			console.log(`  ${chalk.bold(agent.name)} ${chalk.dim(agent.id)}`);
+			if (agent.description)
+				console.log(`    ${chalk.dim('desc:')} ${agent.description}`);
+			console.log(`    ${chalk.dim('last seen:')} ${lastSeen}`);
+		}
+	});
 
 agentCmd
-  .command("info <id>")
-  .description("Show agent details")
-  .action((id: string) => {
-    const agent = getAgent(id);
-    if (!agent) {
-      console.error(chalk.red(`Agent not found: ${id}`));
-      exit(EXIT_CODES.NOT_FOUND);
-    }
-    const globalOpts = program.opts();
-    if (globalOpts["json"]) {
-      printJson(agent);
-      return;
-    }
-    console.log(chalk.bold(`Agent: ${agent.name}`));
-    console.log(`  ID:          ${agent.id}`);
-    if (agent.description) console.log(`  Description: ${agent.description}`);
-    console.log(`  Created:     ${new Date(agent.created_at).toLocaleString()}`);
-    console.log(`  Last seen:   ${new Date(agent.last_seen_at).toLocaleString()}`);
-  });
+	.command('register <name>')
+	.description('Register an agent')
+	.option('-d, --description <text>', 'Agent description')
+	.action((name: string, opts: { description?: string }) => {
+		const agent = registerAgent({ name, description: opts.description });
+		console.log(chalk.green(`Agent registered: ${agent.id} ${agent.name}`));
+	});
+
+agentCmd
+	.command('info <id>')
+	.description('Show agent details')
+	.action((id: string) => {
+		const agent = getAgent(id);
+		if (!agent) {
+			console.error(chalk.red(`Agent not found: ${id}`));
+			exit(EXIT_CODES.NOT_FOUND);
+		}
+		const globalOpts = program.opts();
+		if (globalOpts.json) {
+			printJson(agent);
+			return;
+		}
+		console.log(chalk.bold(`Agent: ${agent.name}`));
+		console.log(`  ID:          ${agent.id}`);
+		if (agent.description) console.log(`  Description: ${agent.description}`);
+		console.log(
+			`  Created:     ${new Date(agent.created_at).toLocaleString()}`
+		);
+		console.log(
+			`  Last seen:   ${new Date(agent.last_seen_at).toLocaleString()}`
+		);
+	});
 
 // Top-level remove/uninstall — delegates to provider/card remove
 program
-  .command("remove <type> <name>")
-  .alias("rm")
-  .alias("uninstall")
-  .description("Remove a record. Type: provider | card")
-  .option("-y, --yes", "Skip confirmation prompt")
-  .action(async (type: string, name: string, opts: { yes?: boolean }) => {
-    try {
-      switch (type.toLowerCase()) {
-        case "provider": {
-          const provider = getProviderByName(name);
-          if (!provider) {
-            console.error(chalk.red(`Provider not found: ${name}`));
-            exit(EXIT_CODES.ERROR);
-          }
-          if (!opts.yes) {
-            const response = await new Promise<string>((resolve) => {
-              process.stdout.write(chalk.yellow(`Remove provider "${name}"? This cannot be undone. (y/N) `));
-              process.stdin.once("data", (d) => resolve(d.toString().trim().toLowerCase()));
-            });
-            if (response !== "y") {
-              console.log(chalk.dim("Aborted."));
-              return;
-            }
-          }
-          deleteProvider(provider.id);
-          removeProviderConfig(name);
-          const config = loadConfig();
-          if (config.default_provider === name) { delete config.default_provider; saveConfig(config); }
-          console.log(chalk.green(`✓ Provider removed: ${name}`));
-          break;
-        }
-        case "card": {
-          const db = getDatabase();
-          const cardId = resolvePartialId(db, "cards", name) ?? name;
-          const card = getCard(cardId);
-          if (!card) { console.error(chalk.red(`Card not found: ${name}`)); exit(EXIT_CODES.ERROR); }
-          if (!opts.yes) {
-            const response = await new Promise<string>((resolve) => {
-              process.stdout.write(chalk.yellow(`Remove card "${card.name}" (${card.id.slice(0, 8)})? This cannot be undone. (y/N) `));
-              process.stdin.once("data", (d) => resolve(d.toString().trim().toLowerCase()));
-            });
-            if (response !== "y") {
-              console.log(chalk.dim("Aborted."));
-              return;
-            }
-          }
-          updateCard(cardId, { status: "closed" });
-          console.log(chalk.green(`✓ Card ${cardId.slice(0, 8)} removed`));
-          break;
-        }
-        default:
-          console.error(chalk.red(`Unknown type: ${type}. Use: provider | card`));
-          exit(EXIT_CODES.ERROR);
-      }
-    } catch (e) {
-      console.error(chalk.red(`Failed: ${e instanceof Error ? e.message : String(e)}`));
-      exit(EXIT_CODES.ERROR);
-    }
-  });
+	.command('remove <type> <name>')
+	.alias('rm')
+	.alias('uninstall')
+	.description('Remove a record. Type: provider | card')
+	.option('-y, --yes', 'Skip confirmation prompt')
+	.action(async (type: string, name: string, opts: { yes?: boolean }) => {
+		try {
+			switch (type.toLowerCase()) {
+				case 'provider': {
+					const provider = getProviderByName(name);
+					if (!provider) {
+						console.error(chalk.red(`Provider not found: ${name}`));
+						exit(EXIT_CODES.ERROR);
+					}
+					if (!opts.yes) {
+						const response = await new Promise<string>((resolve) => {
+							process.stdout.write(
+								chalk.yellow(
+									`Remove provider "${name}"? This cannot be undone. (y/N) `
+								)
+							);
+							process.stdin.once('data', (d) =>
+								resolve(d.toString().trim().toLowerCase())
+							);
+						});
+						if (response !== 'y') {
+							console.log(chalk.dim('Aborted.'));
+							return;
+						}
+					}
+					deleteProvider(provider.id);
+					removeProviderConfig(name);
+					const config = loadConfig();
+					if (config.default_provider === name) {
+						config.default_provider = undefined;
+						saveConfig(config);
+					}
+					console.log(chalk.green(`✓ Provider removed: ${name}`));
+					break;
+				}
+				case 'card': {
+					const db = getDatabase();
+					const cardId = resolvePartialId(db, 'cards', name) ?? name;
+					const card = getCard(cardId);
+					if (!card) {
+						console.error(chalk.red(`Card not found: ${name}`));
+						exit(EXIT_CODES.ERROR);
+					}
+					if (!opts.yes) {
+						const response = await new Promise<string>((resolve) => {
+							process.stdout.write(
+								chalk.yellow(
+									`Remove card "${card.name}" (${card.id.slice(0, 8)})? This cannot be undone. (y/N) `
+								)
+							);
+							process.stdin.once('data', (d) =>
+								resolve(d.toString().trim().toLowerCase())
+							);
+						});
+						if (response !== 'y') {
+							console.log(chalk.dim('Aborted.'));
+							return;
+						}
+					}
+					updateCard(cardId, { status: 'closed' });
+					console.log(chalk.green(`✓ Card ${cardId.slice(0, 8)} removed`));
+					break;
+				}
+				default:
+					console.error(
+						chalk.red(`Unknown type: ${type}. Use: provider | card`)
+					);
+					exit(EXIT_CODES.ERROR);
+			}
+		} catch (e) {
+			console.error(
+				chalk.red(`Failed: ${e instanceof Error ? e.message : String(e)}`)
+			);
+			exit(EXIT_CODES.ERROR);
+		}
+	});
 
 // ── feedback ──────────────────────────────────────────────────────────────────
 
 program
-  .command("feedback <message>")
-  .description("Send feedback about this service")
-  .option("-e, --email <email>", "Contact email")
-  .option("-c, --category <cat>", "Category: bug, feature, general", "general")
-  .action(async (message: string, opts: { email?: string; category?: string }) => {
-    try {
-      const db = getDatabase();
-      const version = getVersion();
-      db.run(
-        "INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)",
-        [message, opts.email || null, opts.category || "general", version]
-      );
-      console.log(chalk.green("✓") + " Feedback saved. Thank you!");
-    } catch (e) {
-      console.error(chalk.red(`Failed: ${e instanceof Error ? e.message : String(e)}`));
-      exit(EXIT_CODES.ERROR);
-    }
-  });
+	.command('feedback <message>')
+	.description('Send feedback about this service')
+	.option('-e, --email <email>', 'Contact email')
+	.option('-c, --category <cat>', 'Category: bug, feature, general', 'general')
+	.action(
+		async (message: string, opts: { email?: string; category?: string }) => {
+			try {
+				const db = getDatabase();
+				const version = getVersion();
+				db.run(
+					'INSERT INTO feedback (message, email, category, version) VALUES (?, ?, ?, ?)',
+					[message, opts.email || null, opts.category || 'general', version]
+				);
+				console.log(`${chalk.green('✓')} Feedback saved. Thank you!`);
+			} catch (e) {
+				console.error(
+					chalk.red(`Failed: ${e instanceof Error ? e.message : String(e)}`)
+				);
+				exit(EXIT_CODES.ERROR);
+			}
+		}
+	);
 
 // ── Shell completions ──────────────────────────────────────────────────────
 
-const completionsCmd = program.command("completions").description("Generate shell completion scripts");
+const completionsCmd = program
+	.command('completions')
+	.description('Generate shell completion scripts');
 
 completionsCmd
-  .command("bash", { isDefault: true })
-  .description("Generate bash completion script")
-  .action(() => {
-    console.log(`# wallets bash completion
+	.command('bash', { isDefault: true })
+	.description('Generate bash completion script')
+	.action(() => {
+		console.log(`# wallets bash completion
 _wallets_completions()
 {
   local cur prev opts
@@ -1408,13 +2037,13 @@ _wallets_completions()
   return 0
 }
 complete -F _wallets_completions wallets`);
-  });
+	});
 
 completionsCmd
-  .command("zsh")
-  .description("Generate zsh completion script")
-  .action(() => {
-    console.log(`# wallets zsh completion
+	.command('zsh')
+	.description('Generate zsh completion script')
+	.action(() => {
+		console.log(`# wallets zsh completion
 _wallets() {
   local -a commands
   commands=(
@@ -1437,13 +2066,13 @@ _wallets() {
   return 0
 }
 compdef _wallets wallets`);
-  });
+	});
 
 completionsCmd
-  .command("fish")
-  .description("Generate fish completion script")
-  .action(() => {
-    console.log(`# wallets fish completion
+	.command('fish')
+	.description('Generate fish completion script')
+	.action(() => {
+		console.log(`# wallets fish completion
 complete -c wallets -f
 complete -c wallets -s json -l json -d "Output as JSON"
 complete -c wallets -s q -l quiet -d "Suppress output except errors"
@@ -1460,72 +2089,97 @@ complete -c wallets -a feedback -d "Send feedback"
 complete -c wallets -a audit -d "View audit log"
 complete -c wallets -a completions -d "Generate shell completions"
 complete -c wallets -n "__fish_seen_subcommand_from card" -a "create create-batch list details close freeze unfreeze rename profile" -d "Card commands"`);
-  });
+	});
 
 // ── Audit command ───────────────────────────────────────────────────────────
 
 program
-  .command("audit")
-  .description("View audit log of changes")
-  .option("-e, --entity <type>", "Filter by entity type: card, provider, transaction, agent")
-  .option("-i, --entity-id <id>", "Filter by entity ID")
-  .option("-a, --actor <id>", "Filter by actor ID")
-  .option("-n, --limit <n>", "Limit results", "50")
-  .option("-o, --offset <n>", "Offset for pagination", "0")
-  .option("-f, --format <type>", "Output format: table, json, csv", "table")
-  .action((opts: { entity?: string; entityId?: string; actor?: string; limit: string; offset: string; format?: string }) => {
-    const entries = listAuditLog({
-      entity_type: opts.entity as AuditEntry["entity_type"],
-      entity_id: opts.entityId,
-      actor_id: opts.actor,
-      limit: parseInt(opts.limit, 10),
-      offset: parseInt(opts.offset, 10),
-    });
+	.command('audit')
+	.description('View audit log of changes')
+	.option(
+		'-e, --entity <type>',
+		'Filter by entity type: card, provider, transaction, agent'
+	)
+	.option('-i, --entity-id <id>', 'Filter by entity ID')
+	.option('-a, --actor <id>', 'Filter by actor ID')
+	.option('-n, --limit <n>', 'Limit results', '50')
+	.option('-o, --offset <n>', 'Offset for pagination', '0')
+	.option('-f, --format <type>', 'Output format: table, json, csv', 'table')
+	.action(
+		(opts: {
+			entity?: string;
+			entityId?: string;
+			actor?: string;
+			limit: string;
+			offset: string;
+			format?: string;
+		}) => {
+			const entries = listAuditLog({
+				entity_type: opts.entity as AuditEntry['entity_type'],
+				entity_id: opts.entityId,
+				actor_id: opts.actor,
+				limit: Number.parseInt(opts.limit, 10),
+				offset: Number.parseInt(opts.offset, 10),
+			});
 
-    const globalOpts = program.opts();
-    const format = opts.format || (globalOpts["json"] ? "json" : "table");
+			const globalOpts = program.opts();
+			const format = opts.format || (globalOpts.json ? 'json' : 'table');
 
-    if (format === "json") {
-      printJson(entries);
-      return;
-    }
+			if (format === 'json') {
+				printJson(entries);
+				return;
+			}
 
-    if (entries.length === 0) {
-      console.log(chalk.yellow("No audit entries found."));
-      return;
-    }
+			if (entries.length === 0) {
+				console.log(chalk.yellow('No audit entries found.'));
+				return;
+			}
 
-    if (format === "csv") {
-      console.log("id,action,entity_type,entity_id,actor_id,actor_name,created_at");
-      for (const entry of entries) {
-        console.log(`${entry.id},${entry.action},${entry.entity_type},${entry.entity_id},${entry.actor_id || ""},${entry.actor_name || ""},${entry.created_at}`);
-      }
-      return;
-    }
+			if (format === 'csv') {
+				console.log(
+					'id,action,entity_type,entity_id,actor_id,actor_name,created_at'
+				);
+				for (const entry of entries) {
+					console.log(
+						`${entry.id},${entry.action},${entry.entity_type},${entry.entity_id},${entry.actor_id || ''},${entry.actor_name || ''},${entry.created_at}`
+					);
+				}
+				return;
+			}
 
-    console.log(chalk.bold("Audit Log:"));
-    for (const entry of entries) {
-      const actor = entry.actor_name || entry.actor_id || "system";
-      console.log(`  ${chalk.dim(entry.created_at)} ${entry.action.padEnd(8)} ${entry.entity_type.padEnd(12)} ${entry.entity_id.slice(0, 8)} by ${actor}`);
-    }
-  });
+			console.log(chalk.bold('Audit Log:'));
+			for (const entry of entries) {
+				const actor = entry.actor_name || entry.actor_id || 'system';
+				console.log(
+					`  ${chalk.dim(entry.created_at)} ${entry.action.padEnd(8)} ${entry.entity_type.padEnd(12)} ${entry.entity_id.slice(0, 8)} by ${actor}`
+				);
+			}
+		}
+	);
 
 // ── RC file support (~/.walletsrc) ─────────────────────────────────────────
 
 function loadRcFile(): string[] {
-  const rcPath = join(homedir(), ".walletsrc");
-  if (!existsSync(rcPath)) return [];
-  try {
-    const content = readFileSync(rcPath, "utf-8");
-    return content.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
-  } catch {
-    return [];
-  }
+	const rcPath = join(homedir(), '.walletsrc');
+	if (!existsSync(rcPath)) return [];
+	try {
+		const content = readFileSync(rcPath, 'utf-8');
+		return content
+			.split('\n')
+			.map((l) => l.trim())
+			.filter((l) => l && !l.startsWith('#'));
+	} catch {
+		return [];
+	}
 }
 
 const rcArgs = loadRcFile();
 if (rcArgs.length > 0) {
-  process.argv = [...process.argv.slice(0, 2), ...rcArgs, ...process.argv.slice(2)];
+	process.argv = [
+		...process.argv.slice(0, 2),
+		...rcArgs,
+		...process.argv.slice(2),
+	];
 }
 
 program.parse();

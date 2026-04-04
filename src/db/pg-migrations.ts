@@ -5,8 +5,8 @@
  */
 
 export const PG_MIGRATIONS: string[] = [
-  // Migration 1: providers table
-  `CREATE TABLE IF NOT EXISTS providers (
+	// Migration 1: providers table
+	`CREATE TABLE IF NOT EXISTS providers (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
     type TEXT NOT NULL,
@@ -17,8 +17,8 @@ export const PG_MIGRATIONS: string[] = [
     updated_at TEXT NOT NULL DEFAULT NOW()::text
   )`,
 
-  // Migration 2: cards table
-  `CREATE TABLE IF NOT EXISTS cards (
+	// Migration 2: cards table
+	`CREATE TABLE IF NOT EXISTS cards (
     id TEXT PRIMARY KEY,
     provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
     external_id TEXT NOT NULL,
@@ -37,8 +37,8 @@ export const PG_MIGRATIONS: string[] = [
     updated_at TEXT NOT NULL DEFAULT NOW()::text
   )`,
 
-  // Migration 3: transactions table
-  `CREATE TABLE IF NOT EXISTS transactions (
+	// Migration 3: transactions table
+	`CREATE TABLE IF NOT EXISTS transactions (
     id TEXT PRIMARY KEY,
     card_id TEXT NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
     provider_id TEXT NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
@@ -53,8 +53,8 @@ export const PG_MIGRATIONS: string[] = [
     created_at TEXT NOT NULL DEFAULT NOW()::text
   )`,
 
-  // Migration 4: agents table
-  `CREATE TABLE IF NOT EXISTS agents (
+	// Migration 4: agents table
+	`CREATE TABLE IF NOT EXISTS agents (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
     description TEXT,
@@ -63,22 +63,22 @@ export const PG_MIGRATIONS: string[] = [
     last_seen_at TEXT NOT NULL DEFAULT NOW()::text
   )`,
 
-  // Migration 5: indexes
-  `CREATE INDEX IF NOT EXISTS idx_cards_provider ON cards(provider_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_cards_agent ON cards(agent_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_cards_status ON cards(status)`,
-  `CREATE INDEX IF NOT EXISTS idx_transactions_card ON transactions(card_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_transactions_provider ON transactions(provider_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_transactions_type ON transactions(type)`,
+	// Migration 5: indexes
+	'CREATE INDEX IF NOT EXISTS idx_cards_provider ON cards(provider_id)',
+	'CREATE INDEX IF NOT EXISTS idx_cards_agent ON cards(agent_id)',
+	'CREATE INDEX IF NOT EXISTS idx_cards_status ON cards(status)',
+	'CREATE INDEX IF NOT EXISTS idx_transactions_card ON transactions(card_id)',
+	'CREATE INDEX IF NOT EXISTS idx_transactions_provider ON transactions(provider_id)',
+	'CREATE INDEX IF NOT EXISTS idx_transactions_type ON transactions(type)',
 
-  // Migration 6: _migrations tracking
-  `CREATE TABLE IF NOT EXISTS _migrations (
+	// Migration 6: _migrations tracking
+	`CREATE TABLE IF NOT EXISTS _migrations (
     id INTEGER PRIMARY KEY,
     applied_at TEXT NOT NULL DEFAULT NOW()::text
   )`,
 
-  // Migration 7: feedback table
-  `CREATE TABLE IF NOT EXISTS feedback (
+	// Migration 7: feedback table
+	`CREATE TABLE IF NOT EXISTS feedback (
     id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
     service TEXT NOT NULL,
     version TEXT DEFAULT '',
